@@ -71,13 +71,14 @@ QuantDataPipeline/
 ├── docs/                           # 文件
 │   ├── FILE_MANIFEST.md            # 本檔案
 │   └── HANDOVER_SPEC_V2.md        # 開發規格書
+├── colab_launcher.ipynb            # ⭐ Colab 一鍵啟動器 (表單控制面板)
 ├── main.py                         # L1 下載管線入口
 ├── run_all.py                      # 全自動化管線入口 (下載 + 計算)
 ├── compute_greeks_pipeline.py      # L2 Greeks 計算管線
 ├── requirements.txt                # Python 依賴清單
 ├── status.db                       # SQLite 任務狀態資料庫
 ├── pipeline.log                    # 滾動式日誌檔
-└── .env                            # 環境變數 (API Token)
+└── .env                            # 環境變數 (Token + 額度)
 ```
 
 ---
@@ -117,6 +118,29 @@ QuantDataPipeline/
 - **API**: 可透過 CLI (`--date 2024-05-02`) 或程式化匯入使用。
 - **改進**: 相較舊版硬編碼 `T=0.05`，現已改用結算日日曆計算真實到期時間。
 
+### `colab_launcher.ipynb` — ⭐ Colab 一鍵啟動器
+- **職責**: 提供 Google Colab 中的**單儲存格全自動化管線**，透過圖形化表單控制面板讓使用者無需接觸程式碼。
+- **表單參數**:
+  | 參數 | 類型 | 說明 |
+  |------|------|------|
+  | `FINMIND_API_TOKEN` | 文字 | FinMind API 金鑰 (需 backer/sponsor 等級) |
+  | `API_QUOTA_PER_HOUR` | 整數 | 每小時 API 額度，系統自動計算最佳請求速率 |
+  | `BRANCH` | 文字 | GitHub 分支號碼 |
+  | `LOOKBACK_DAYS` | 整數 | 回溯天數 (`0` = 全量 2011-01-03 至今) |
+  | `SKIP_GREEKS` | 布林 | 是否跳過 Greeks 計算 |
+  | `SYNC_TO_DRIVE` | 布林 | 是否同步到 Google Drive |
+  | `DRIVE_PATH` | 文字 | Drive 儲存路徑 |
+- **核心特性**:
+  - 🖥️ **固定高度輸出** (420px) + 右側原生捲軸，畫面不閃爍不洗版
+  - 📊 **API 用量預估**: 啟動時顯示預估呼叫數、佔額度百分比、預估耗時
+  - 📈 **即時進度**: 每筆任務一行 `✅ 2026-02-02 TXO | 下載成功 [5/43]`
+  - ⛔ **永久性錯誤偵測**: 帳號等級不足時第一次就立即中止，不浪費重試
+  - 🔄 **模組快取清除**: 每次執行自動清除 `sys.modules` 快取，確保載入最新代碼
+  - 🧊 **429 冷卻**: API 限速時自動冷卻 5 分鐘後繼續
+  - 📊 **結束統計**: 顯示實際 API 呼叫數、實際速率 vs 額度、總耗時
+- **執行流程**: Phase 0 (環境準備) → Phase 1 (資料下載) → Phase 2 (Greeks 計算) → Phase 3 (Drive 同步) → 統計
+- **技術棧**: `IPython.display`, `subprocess`, `os.environ`, `sys.modules` 操作
+
 ### `requirements.txt` — Python 依賴清單
 - **內容**: `polars`, `numba`, `scipy`, `numpy`, `duckdb`, `zstandard`, `requests`, `fastapi`, `uvicorn`, `python-dotenv`, `pytest`, `pytest-cov`
 - **安裝**: `pip install -r requirements.txt`
@@ -131,7 +155,12 @@ QuantDataPipeline/
 - **格式**: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
 
 ### `.env` — 環境變數
-- **內容**: `FINMIND_API_TOKEN` — FinMind 付費帳號 API Token（選用，無 Token 則速率限制為 12 秒/請求）。
+- **內容**:
+  | 變數 | 說明 |
+  |------|------|
+  | `FINMIND_API_TOKEN` | FinMind API Token (需 backer/sponsor 等級才能存取逐筆資料) |
+  | `FINMIND_QUOTA_PER_HOUR` | 每小時 API 額度 (如 1600)，系統自動計算最佳速率 |
+  | `RATE_LIMIT_DELAY` | (選用) 直接指定請求間隔秒數，覆蓋自動計算 |
 
 ---
 
@@ -145,11 +174,18 @@ QuantDataPipeline/
   | `PROJECT_ROOT` | 自動偵測 | 專案根目錄 |
   | `DATA_DIR` | `{ROOT}/data/` | Parquet 資料存放處 |
   | `DB_PATH` | `{ROOT}/status.db` | SQLite 路徑 |
-  | `FINMIND_API_TOKEN` | 從 `.env` 讀取 | API 金鑰 |
-  | `RATE_LIMIT_DELAY` | 12s (無 Token) / 6s (有 Token) | API 速率限制 |
+  | `FINMIND_API_TOKEN` | 從 `.env` / `os.environ` 讀取 | API 金鑰 |
+  | `RATE_LIMIT_DELAY` | 自動計算 | API 速率限制 (秒/請求) |
   | `MAX_RETRIES` | 5 | 重試上限 |
   | `COMPRESSION_LEVEL` | 3 | Zstandard 壓縮等級 |
-- **技術棧**: `pathlib`, `python-dotenv`
+- **速率分級**:
+  | 優先級 | 來源 | 說明 |
+  |--------|------|------|
+  | 1 | `RATE_LIMIT_DELAY` 環境變數 | 直接指定秒數 |
+  | 2 | `FINMIND_QUOTA_PER_HOUR` 環境變數 | 自動計算 (含 10% 安全邊際) |
+  | 3 | 有 Token | 6s/req |
+  | 4 | 無 Token (匿名) | 12s/req |
+- **技術棧**: `pathlib`, `python-dotenv`, `os.getenv`
 
 ### `core/db_metadata_manager.py` — 資料庫管理器
 - **職責**: 封裝所有 SQLite 操作的 Singleton 類別。提供任務註冊、狀態更新、查詢等介面。
@@ -195,9 +231,11 @@ QuantDataPipeline/
 - **技術棧**: `time.time()`, `threading.Lock`
 
 ### `fetchers/infrastructure/backoff_retry.py` — 指數退避重試裝飾器
-- **職責**: 提供 `@exponential_backoff` 裝飾器。當被裝飾的函數拋出指定異常 (預設 `Exception`) 時，自動以指數退避策略重試。
+- **職責**: 提供 `@exponential_backoff` 裝飾器。當被裝飾的函數拋出指定異常時，自動以指數退避策略重試。**永久性錯誤 (帳號等級/Token/權限) 會立即拋出，不浪費重試次數。**
 - **退避公式**: `delay = min(base * 2^attempt, max_delay) ± 10% jitter`
 - **預設**: 最多 5 次重試, base=1s, max=60s
+- **永久性錯誤關鍵字**: `user level`, `sponsor`, `permission denied`, `invalid token`, `unauthorized`
+- **核心函數**: `_is_fatal_error(e)` — 檢查錯誤訊息是否包含永久性關鍵字
 - **技術棧**: `functools.wraps`, `random.uniform` (Jitter)
 
 ### `fetchers/parsers/finmind_extractor.py` — API 回應解析器

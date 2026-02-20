@@ -54,48 +54,51 @@ source .venv/bin/activate
 # 3. 安裝依賴
 pip install -r requirements.txt
 
-# 4. (選用) 設定 FinMind API Token → 速率限制從 12s 降到 6s
+# 4. (選用) 設定 FinMind API Token + 額度
 echo "FINMIND_API_TOKEN=your_token" > .env
+echo "FINMIND_QUOTA_PER_HOUR=1600" >> .env  # 系統自動計算最佳速率
 ```
 
 ---
 
 ## 快速上手
 
-### 方式一：全自動化管線 (`run_all.py`) — **推薦**
+### 方式一：Google Colab 一鍵啟動 (`colab_launcher.ipynb`) — **推薦**
+
+直接在 Colab 開啟 `colab_launcher.ipynb`，透過**圖形化表單**設定參數後按下播放鍵：
+
+| 表單欄位 | 說明 |
+|----------|------|
+| `FINMIND_API_TOKEN` | API 金鑰 (需 backer/sponsor 等級) |
+| `API_QUOTA_PER_HOUR` | 每小時 API 額度 (如 1600)，系統自動計算最佳請求速率 |
+| `BRANCH` | GitHub 分支號碼 |
+| `LOOKBACK_DAYS` | 回溯天數 (`0` = 全量抓取 2011-01-03 至今) |
+| `SKIP_GREEKS` | 是否跳過 Greeks 計算 |
+| `SYNC_TO_DRIVE` | 是否同步到 Google Drive |
+
+**特色**：固定高度捲軸輸出、簡潔一行式進度、API 用量預估、永久性錯誤自動中止。
+
+### 方式二：CLI 全自動化管線 (`run_all.py`)
 
 ```bash
-# 倒推 30 天自動下載 + Greeks 計算
-python run_all.py --lookback 30 --env local
-
-# 指定日期範圍
-python run_all.py --start 2024-01-01 --end 2024-01-31
-
-# Colab 環境 (啟用 Google Drive 同步)
-python run_all.py --lookback 60 --env colab
-
-# 僅下載不計算
-python run_all.py --lookback 30 --skip-phase2
+python run_all.py --lookback 30 --env local          # 倒推 30 天
+python run_all.py --start 2024-01-01 --end 2024-01-31  # 指定範圍
+python run_all.py --lookback 60 --env colab            # Colab 模式
+python run_all.py --lookback 30 --skip-phase2          # 僅下載不計算
 ```
 
-### 方式二：分步執行
+### 方式三：分步執行
 
 ```bash
-# Step 1: 僅下載原始資料
-python main.py --start_date 2024-05-01 --end_date 2024-05-31 --workers 4
-
-# Step 2: 僅計算 Greeks
-python compute_greeks_pipeline.py --date 2024-05-02
+python main.py --start_date 2024-05-01 --end_date 2024-05-31 --workers 4  # 下載
+python compute_greeks_pipeline.py --date 2024-05-02                        # 計算
 ```
 
 ### 執行測試
 
 ```bash
-# 全量 pytest (48 個測試)
-python -m pytest tests/ -v --tb=short
-
-# 含覆蓋率
-python -m pytest tests/ -v --cov=. --cov-report=term-missing
+python -m pytest tests/ -v --tb=short              # 全量 48 測試
+python -m pytest tests/ -v --cov=. --cov-report=term-missing  # 含覆蓋率
 ```
 
 ---
@@ -105,7 +108,7 @@ python -m pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 QuantDataPipeline/
 ├── core/                           # L0 核心層
-│   ├── config.py                   #   全域設定 (路徑/Token/速率/重試)
+│   ├── config.py                   #   全域設定 (路徑/Token/額度/速率/重試)
 │   ├── db_metadata_manager.py      #   SQLite WAL 任務狀態管理器 (Singleton)
 │   ├── fetch_orchestrator.py       #   任務調度器 (分派到對應 fetcher)
 │   └── pipeline_logger.py          #   日誌設定 (RotatingFileHandler)
@@ -117,7 +120,7 @@ QuantDataPipeline/
 │   ├── infrastructure/             #   網路基礎設施
 │   │   ├── http_session.py         #     HTTP 連線池 + API 統計
 │   │   ├── rate_limiter.py         #     全域速率限制器
-│   │   └── backoff_retry.py        #     指數退避重試裝飾器
+│   │   └── backoff_retry.py        #     指數退避 + 永久性錯誤偵測
 │   └── parsers/                    #   資料解析
 │       ├── finmind_extractor.py    #     JSON → Polars DataFrame
 │       ├── schema_enforcer.py      #     型別強制 (Datetime[ns], Utf8 補零)
@@ -144,12 +147,13 @@ QuantDataPipeline/
 ├── docs/                           # 文件
 │   ├── FILE_MANIFEST.md            #   完整檔案清單與技術說明
 │   └── HANDOVER_SPEC_V2.md        #   開發規格書
+├── colab_launcher.ipynb            # ⭐ Colab 一鍵啟動器 (表單控制面板)
 ├── main.py                         # L1 下載管線入口
-├── run_all.py                      # 全自動化管線入口 (推薦)
+├── run_all.py                      # 全自動化管線入口
 ├── compute_greeks_pipeline.py      # L2 Greeks 計算管線
 ├── requirements.txt                # 依賴清單
 ├── status.db                       # 任務狀態資料庫
-└── .env                            # 環境變數 (API Token)
+└── .env                            # 環境變數 (Token + 額度)
 ```
 
 ---
@@ -158,10 +162,12 @@ QuantDataPipeline/
 
 | 特性 | 實作 |
 |------|------|
+| **Colab 一鍵啟動** | 表單化控制面板，固定高度捲軸輸出，API 用量預估與進度追蹤 |
 | **斷點續傳** | 每筆任務狀態記錄在 SQLite，中斷後自動從上次暫停處繼續 |
 | **原子性寫入** | `.tmp` → `os.rename()` → `.parquet`，防止中途崩潰產生損壞檔案 |
 | **高併發安全** | SQLite WAL + Thread-local 連線，經過 20 線程壓測驗證 |
-| **API 防護** | 指數退避重試 (5 次) + 全域速率限制 + 429 自動冷卻 5 分鐘 |
+| **API 防護** | 指數退避重試 + 全域速率限制 + 429 冷卻 + 永久性錯誤立即中止 |
+| **智慧速率** | 根據 `FINMIND_QUOTA_PER_HOUR` 自動計算最佳請求間隔 (含 10% 安全邊際) |
 | **Numba 加速** | BSM Greeks 計算 JIT 編譯，1 秒處理數十萬筆 |
 | **多週期聚合** | Polars `group_by_dynamic` 產出 1m/1h/4h/1d 雙表 |
 | **混合儲存** | 當月日檔即時更新 + 歷史月檔批量合併 |
