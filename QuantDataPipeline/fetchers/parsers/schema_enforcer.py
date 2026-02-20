@@ -1,95 +1,74 @@
 import polars as pl
 import logging
-from typing import Dict, Any
 
-logger = logging.getLogger("pipeline.schema_enforcer")
+logger = logging.getLogger("pipeline.schema")
+
+class SchemaEnforcer:
+    @staticmethod
+    def sanitize_stock_id(df: pl.DataFrame, col_name="stock_id") -> pl.DataFrame:
+        """強制補零邏輯：確保股票代碼為 4 或 6 位字串"""
+        if col_name in df.columns:
+            # 確保轉為字串並補零
+            return df.with_columns(
+                pl.col(col_name).cast(pl.Utf8).str.pad_start(4, "0")
+            )
+        return df
+
+    @staticmethod
+    def apply_standard_types(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
+        """根據資料集套用標準型別"""
+        if df.is_empty():
+            return df
+
+        # 統一處理日期
+        if "date" in df.columns:
+            # Check if date is already Datetime
+            if df.schema["date"] == pl.Utf8:
+                 df = df.with_columns(
+                    pl.col("date").str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d", strict=False)
+                )
+            elif df.schema["date"] == pl.Date:
+                 df = df.with_columns(pl.col("date").cast(pl.Datetime(time_unit="ns")))
+
+        # 針對特定資料集加強
+        if dataset == "TaiwanStockPrice":
+            df = SchemaEnforcer.sanitize_stock_id(df)
+            # 加回數值型別轉換以確保資料品質
+            cols_to_cast = {
+                "Trading_Volume": pl.Int64,
+                "Trading_money": pl.Int64,
+                "open": pl.Float64,
+                "max": pl.Float64,
+                "min": pl.Float64,
+                "close": pl.Float64,
+                "spread": pl.Float64,
+                "Trading_turnover": pl.Int64,
+            }
+            exprs = [pl.col(c).cast(t) for c, t in cols_to_cast.items() if c in df.columns]
+            if exprs:
+                df = df.with_columns(exprs)
+
+        elif dataset == "TaiwanStockPriceTick":
+            df = SchemaEnforcer.sanitize_stock_id(df)
+            cols_to_cast = {
+                "deal_price": pl.Float64,
+                "volume": pl.Int64,
+            }
+            exprs = [pl.col(c).cast(t) for c, t in cols_to_cast.items() if c in df.columns]
+            if exprs:
+                df = df.with_columns(exprs)
+
+            # Tick Time handling?
+            if "Time" in df.columns and "date" in df.columns:
+                 # Combine date + Time -> timestamp?
+                 # FinMind Time is usually HH:mm:ss.SSSSSS
+                 pass
+
+        elif dataset == "TaiwanStockTradingDate":
+            df = SchemaEnforcer.sanitize_stock_id(df)
+
+        return df
 
 def enforce_schema(df: pl.DataFrame, dataset_name: str) -> pl.DataFrame:
-    """
-    Applies strict schema enforcement and type casting for FinMind datasets.
-    Ensures all dates are ns-precision timestamps and IDs are strings.
-    """
-    if df.is_empty():
-        return df
-
-    try:
-        # Common transformations
-        # Most FinMind datasets have 'date' or 'date' + 'Time'
-        if "date" in df.columns:
-            # If there's a 'Time' column, we might need to combine them,
-            # but usually FinMind 'date' is YYYY-MM-DD and 'Time' is HH:mm:ss.
-            # However, for daily data, 'date' is sufficient.
-            # For tick data, 'Time' is present.
-
-            # Basic date casting first (handle YYYY-MM-DD)
-            df = df.with_columns(
-                pl.col("date").cast(pl.Utf8).str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d", strict=False)
-            )
-
-        # Dataset-specific logic
-        if dataset_name == "TaiwanStockPrice":
-            df = df.with_columns([
-                pl.col("stock_id").cast(pl.Utf8),
-                pl.col("Trading_Volume").cast(pl.Int64),
-                pl.col("Trading_money").cast(pl.Int64),
-                pl.col("open").cast(pl.Float64),
-                pl.col("max").cast(pl.Float64),
-                pl.col("min").cast(pl.Float64),
-                pl.col("close").cast(pl.Float64),
-                pl.col("spread").cast(pl.Float64),
-                pl.col("Trading_turnover").cast(pl.Int64),
-            ])
-
-        elif dataset_name == "TaiwanStockPriceTick":
-             # Tick data usually has 'Time' like '13:30:00.123456'
-             # We need to combine 'date' and 'Time' into a single timestamp if possible,
-             # or at least cast them correctly.
-             # For now, let's just cast types.
-             df = df.with_columns([
-                pl.col("stock_id").cast(pl.Utf8),
-                pl.col("deal_price").cast(pl.Float64),
-                pl.col("volume").cast(pl.Int64),
-                # Time is usually string, keep it as is or parse later in processors?
-                # The prompt says "Time: Force convert to Datetime".
-                # If we have date and Time, we should combine.
-                # But let's assume raw schema enforcement here.
-                pl.col("Time").cast(pl.Utf8)
-             ])
-             # Optimization: Combine date + Time -> timestamp?
-             # Let's do it if both exist
-             if "date" in df.columns and "Time" in df.columns:
-                 df = df.with_columns(
-                     (pl.col("date").dt.strftime("%Y-%m-%d") + " " + pl.col("Time")).str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d %H:%M:%S%.f")
-                     .alias("timestamp")
-                 )
-
-        elif dataset_name == "TaiwanOptionTick":
-             df = df.with_columns([
-                pl.col("contract_date").cast(pl.Utf8), # Delivery month
-                pl.col("strike_price").cast(pl.Float64),
-                pl.col("call_put").cast(pl.Utf8),
-                pl.col("deal_price").cast(pl.Float64),
-                pl.col("volume").cast(pl.Int64),
-             ])
-             if "date" in df.columns and "Time" in df.columns:
-                 df = df.with_columns(
-                     (pl.col("date").dt.strftime("%Y-%m-%d") + " " + pl.col("Time")).str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d %H:%M:%S%.f")
-                     .alias("timestamp")
-                 )
-
-        elif dataset_name == "TaiwanOptionOpenInterestLargeTraders":
-             # As per prompt example
-             df = df.with_columns([
-                # date is already handled in common block if it's YYYY-MM-DD
-                pl.col("contract_id").cast(pl.Utf8),
-                pl.col("buy_volume").cast(pl.Int64),
-                pl.col("sell_volume").cast(pl.Int64),
-                pl.col("buy_oi").cast(pl.Int64),
-                pl.col("sell_oi").cast(pl.Int64),
-             ])
-
-        return df
-
-    except Exception as e:
-        logger.error(f"Schema enforcement failed for {dataset_name}: {e}")
-        raise e
+    """Wrapper for backward compatibility."""
+    return SchemaEnforcer.apply_standard_types(df, dataset_name)

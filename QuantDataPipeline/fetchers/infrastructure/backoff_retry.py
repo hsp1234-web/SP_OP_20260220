@@ -28,7 +28,7 @@ def exponential_backoff(
                 except exceptions as e:
                     retry_count += 1
                     if retry_count > retries:
-                        logger.error(f"Function {func.__name__} failed after {retries} retries. Last error: {e}")
+                        logger.error(f"函式 {func.__name__} 於 {retries} 次重試後失敗。最後錯誤: {e}")
                         raise e
 
                     # Calculate delay: base * 2^attempt
@@ -37,7 +37,7 @@ def exponential_backoff(
                     jitter = random.uniform(-0.1 * delay, 0.1 * delay)
                     sleep_time = max(0, delay + jitter)
 
-                    logger.warning(f"Retry {retry_count}/{retries} for {func.__name__} due to {type(e).__name__}: {e}. Sleeping {sleep_time:.2f}s...")
+                    logger.warning(f"{func.__name__} 重試 {retry_count}/{retries} (原因: {type(e).__name__}: {e})。等待 {sleep_time:.2f} 秒...")
                     time.sleep(sleep_time)
         return wrapper
     return decorator

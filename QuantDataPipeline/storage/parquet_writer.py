@@ -22,7 +22,7 @@ def save_dataframe(
         (file_path, md5_checksum)
     """
     if df.is_empty():
-        logger.warning(f"DataFrame is empty for {dataset_name} {date} {data_id}. Skipping write.")
+        logger.warning(f"{dataset_name} {date} {data_id} 資料為空。跳過寫入。")
         return "", ""
 
     year = date.split("-")[0]
@@ -49,15 +49,15 @@ def save_dataframe(
 
         # Atomic Rename
         if target_path.exists():
-            logger.debug(f"Overwriting existing file: {target_path}")
+            logger.debug(f"覆蓋既有檔案: {target_path}")
 
         os.rename(tmp_path, target_path)
-        logger.info(f"Successfully saved {target_path} (MD5: {checksum})")
+        logger.info(f"成功儲存 {target_path} (MD5: {checksum})")
 
         return str(target_path), checksum
 
     except Exception as e:
-        logger.error(f"Failed to save parquet file {target_path}: {e}")
+        logger.error(f"儲存 parquet 檔案 {target_path} 失敗: {e}")
         if tmp_path.exists():
             try:
                 tmp_path.unlink()

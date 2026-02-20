@@ -2,33 +2,31 @@ import polars as pl
 from fetchers.infrastructure.http_session import get_session
 from fetchers.infrastructure.rate_limiter import RateLimiter
 from fetchers.infrastructure.backoff_retry import exponential_backoff
-from fetchers.parsers.payload_builder import build_payload
 from fetchers.parsers.finmind_extractor import extract_and_cast
 from core.config import FINMIND_API_TOKEN
 
 DATASET_NAME = "TaiwanOptionTick"
-URL = "https://api.finmindtrade.com/api/v4/data"
 
 @exponential_backoff()
 def fetch(date: str, data_id: str) -> pl.DataFrame:
     """
-    Fetch TaiwanOptionTick data for a specific date and contract_id.
+    抓取台灣期貨逐筆成交資訊 (TaiwanOptionTick)。
     """
     session = get_session()
     limiter = RateLimiter()
 
-    # Rate Limiting
+    # 速率限制
     limiter.wait()
 
-    # Build Payload
-    params = build_payload(DATASET_NAME, date, date, data_id)
-    if FINMIND_API_TOKEN:
-        params["token"] = FINMIND_API_TOKEN
+    # 透過 HTTPSession 執行請求
+    res_json = session.get_data(
+        dataset=DATASET_NAME,
+        data_id=data_id,
+        start_date=date,
+        end_date=date
+    )
 
-    # Execute Request
-    response = session.get(URL, params=params)
-
-    # Extract and Cast
-    df = extract_and_cast(response, DATASET_NAME)
+    # 萃取並轉換型別
+    df = extract_and_cast(res_json, DATASET_NAME)
 
     return df

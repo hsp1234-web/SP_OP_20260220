@@ -1,51 +1,58 @@
-import requests
 import polars as pl
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Union
+import requests
 
 from .schema_enforcer import enforce_schema
 
 logger = logging.getLogger("pipeline.extractor")
 
-def extract_and_cast(response: requests.Response, dataset_name: str) -> pl.DataFrame:
+def extract_and_cast(data_source: Union[requests.Response, Dict[str, Any]], dataset_name: str) -> pl.DataFrame:
     """
-    Process FinMind API response and convert to strictly typed Polars DataFrame.
+    處理 FinMind API 回應 (Response 或 JSON dict) 並轉換為嚴格型別的 Polars DataFrame。
     """
-    # 1. Ensure HTTP connection success (handled by caller/retry, but good to check)
-    response.raise_for_status()
+    json_payload = {}
 
-    try:
-        json_payload = response.json()
-    except ValueError as e:
-        logger.error(f"Failed to parse JSON response: {e}")
-        raise ValueError("Invalid JSON response from API")
+    # 1. 處理輸入型別
+    if isinstance(data_source, requests.Response):
+        # 確保 HTTP 連線成功
+        data_source.raise_for_status()
+        try:
+            json_payload = data_source.json()
+        except ValueError as e:
+            logger.error(f"無法解析 JSON 回應: {e}")
+            raise ValueError("無效的 JSON 回應")
+    elif isinstance(data_source, dict):
+        json_payload = data_source
+    else:
+        raise TypeError(f"預期輸入 requests.Response 或 dict，實際得到 {type(data_source)}")
 
-    # 2. Business logic error handling
+    # 2. 業務邏輯錯誤處理
     if json_payload.get("msg") != "success":
-        msg = json_payload.get("msg", "Unknown error")
-        logger.error(f"API returned error message: {msg}")
-        raise ValueError(f"API Error: {msg}")
+        msg = json_payload.get("msg", "未知錯誤")
+        logger.error(f"API 回傳錯誤訊息: {msg}")
+        raise ValueError(f"API 錯誤: {msg}")
 
     data_list = json_payload.get("data", [])
 
-    # 3. Empty data guard (e.g., holiday or suspended trading)
+    # 3. 空資料防護 (例如假日或停止交易)
     if not data_list:
-        logger.info(f"No data found for dataset {dataset_name}. Returning empty DataFrame.")
+        logger.info(f"資料集 {dataset_name} 無資料。回傳空 DataFrame。")
         return pl.DataFrame()
 
-    # 4. Zero-copy conversion to Polars DataFrame
+    # 4. 轉換為 Polars DataFrame (Zero-copy)
     try:
-        # infer_schema_length=None forces Polars to scan all rows for schema inference, avoiding type errors
+        # infer_schema_length=None 強制掃描所有列以推斷 Schema
         df = pl.from_dicts(data_list, infer_schema_length=None)
     except Exception as e:
-        logger.error(f"Failed to convert data list to DataFrame: {e}")
+        logger.error(f"轉換資料列表為 DataFrame 失敗: {e}")
         raise e
 
-    # 5. Strict Schema Enforcement
+    # 5. 嚴格 Schema 驗證
     try:
         df = enforce_schema(df, dataset_name)
     except Exception as e:
-        logger.error(f"Schema enforcement failed: {e}")
+        logger.error(f"Schema 驗證失敗: {e}")
         raise e
 
     return df
