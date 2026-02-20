@@ -1,0 +1,66 @@
+import os
+import logging
+from pathlib import Path
+import polars as pl
+
+from core.config import DATA_DIR, COMPRESSION_LEVEL
+from .integrity_validator import compute_md5
+
+logger = logging.getLogger("pipeline.storage")
+
+def save_dataframe(
+    df: pl.DataFrame,
+    dataset_name: str,
+    date: str,
+    data_id: str = ""
+) -> tuple[str, str]:
+    """
+    Save DataFrame to Parquet with atomic write and MD5 checksum.
+    Path: data/{year}/{dataset_name}/{data_id}_{date}.parquet (or {date}.parquet if no data_id)
+
+    Returns:
+        (file_path, md5_checksum)
+    """
+    if df.is_empty():
+        logger.warning(f"DataFrame is empty for {dataset_name} {date} {data_id}. Skipping write.")
+        return "", ""
+
+    year = date.split("-")[0]
+    target_dir = DATA_DIR / year / dataset_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Filename strategy:
+    # If data_id is present: {data_id}_{date}.parquet
+    # If not: {date}.parquet
+    filename = f"{data_id}_{date}.parquet" if data_id else f"{date}.parquet"
+    target_path = target_dir / filename
+    tmp_path = target_path.with_suffix(".tmp")
+
+    try:
+        # Write to tmp using Polars native writer
+        df.write_parquet(
+            tmp_path,
+            compression="zstd",
+            compression_level=COMPRESSION_LEVEL
+        )
+
+        # Verify Integrity
+        checksum = compute_md5(tmp_path)
+
+        # Atomic Rename
+        if target_path.exists():
+            logger.debug(f"Overwriting existing file: {target_path}")
+
+        os.rename(tmp_path, target_path)
+        logger.info(f"Successfully saved {target_path} (MD5: {checksum})")
+
+        return str(target_path), checksum
+
+    except Exception as e:
+        logger.error(f"Failed to save parquet file {target_path}: {e}")
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise e

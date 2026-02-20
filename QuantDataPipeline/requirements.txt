@@ -1,0 +1,8 @@
+polars
+numba
+duckdb
+zstandard
+requests
+fastapi
+uvicorn
+python-dotenv

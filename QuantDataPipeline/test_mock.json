@@ -1,0 +1,30 @@
+{
+  "msg": "success",
+  "status": 200,
+  "data": [
+    {
+      "date": "2023-10-04",
+      "stock_id": "2330",
+      "Trading_Volume": 29808729,
+      "Trading_money": 15519741014,
+      "open": 521.0,
+      "max": 523.0,
+      "min": 519.0,
+      "close": 520.0,
+      "spread": -9.0,
+      "Trading_turnover": 49176
+    },
+    {
+      "date": "2023-10-05",
+      "stock_id": "2330",
+      "Trading_Volume": 25749184,
+      "Trading_money": 13563941939,
+      "open": 523.0,
+      "max": 529.0,
+      "min": 523.0,
+      "close": 528.0,
+      "spread": 8.0,
+      "Trading_turnover": 19027
+    }
+  ]
+}
