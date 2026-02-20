@@ -2,6 +2,8 @@
 
 本專案為高效能金融數據中台，旨在將原始金融數據 (L1) 經過標準化處理轉換為分析就緒的 Parquet 格式 (L4)，並支援高併發、斷點續傳與嚴格的資料驗證。
 
+有關詳細的檔案清單與功能說明，請參閱 **[docs/FILE_MANIFEST.md](QuantDataPipeline/docs/FILE_MANIFEST.md)**。
+
 ## 系統架構
 
 本系統採用 ETL (Extract, Transform, Load) 架構，資料流向如下：
@@ -106,6 +108,7 @@ QuantDataPipeline/
 ├── storage/                # 儲存層 (Parquet Writer, Integrity Validator)
 ├── tests/                  # 測試與驗證腳本
 ├── data/                   # 產出的 Parquet 資料檔案 (依年份分資料夾)
+├── docs/                   # 文件目錄
 ├── status.db               # 任務狀態與 API 統計資料庫
 ├── main.py                 # 程式進入點
 └── requirements.txt        # 專案依賴列表
