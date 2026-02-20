@@ -24,9 +24,23 @@ FINMIND_API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 COMPRESSION_LEVEL = 3
 
 # 速率限制 (每請求秒數)
-# 匿名: 300 requests/hour -> 12 seconds/request
-# 註冊 (with token): 600 requests/hour -> 6 seconds/request
-RATE_LIMIT_DELAY = 12.0 if not FINMIND_API_TOKEN else 6.0
+# 可透過環境變數覆蓋: RATE_LIMIT_DELAY (秒) 或 FINMIND_QUOTA_PER_HOUR (次/hr)
+# 預設分級:
+#   匿名:    300 req/hr → 12s/req
+#   免費Token: 600 req/hr → 6s/req
+#   付費帳號: 由 FINMIND_QUOTA_PER_HOUR 計算 (如 1600 → 2.25s → 安全取 2.5s)
+_explicit_delay = os.getenv("RATE_LIMIT_DELAY")
+_quota_per_hour = os.getenv("FINMIND_QUOTA_PER_HOUR")
+
+if _explicit_delay:
+    RATE_LIMIT_DELAY = float(_explicit_delay)
+elif _quota_per_hour:
+    # 加 10% 安全邊際
+    RATE_LIMIT_DELAY = round(3600 / int(_quota_per_hour) * 1.1, 2)
+elif FINMIND_API_TOKEN:
+    RATE_LIMIT_DELAY = 6.0
+else:
+    RATE_LIMIT_DELAY = 12.0
 
 # 重試設定
 MAX_RETRIES = 5
