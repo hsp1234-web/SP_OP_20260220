@@ -70,13 +70,16 @@ echo "FINMIND_QUOTA_PER_HOUR=1600" >> .env  # 系統自動計算最佳速率
 | 表單欄位 | 說明 |
 |----------|------|
 | `FINMIND_API_TOKEN` | API 金鑰 (需 backer/sponsor 等級) |
-| `API_QUOTA_PER_HOUR` | 每小時 API 額度 (如 1600)，系統自動計算最佳請求速率 |
 | `BRANCH` | GitHub 分支號碼 |
 | `LOOKBACK_DAYS` | 回溯天數 (`0` = 全量抓取 2011-01-03 至今) |
 | `SKIP_GREEKS` | 是否跳過 Greeks 計算 |
+| `DOWNLOAD_WORKERS` | 下載 API 同時併發數 (建議 30~60) |
+| `GREEKS_WORKERS` | Greeks 計算核心數 (`0` = 自動偵測) |
 | `SYNC_TO_DRIVE` | 是否同步到 Google Drive |
+| `RESTORE_FROM_DRIVE` | 斷線續傳：若本地無 Parquet，是否從 Drive 複製回來算 Greeks |
+| `CLEANUP_AFTER_SYNC` | 每月同步後自動刪除本地 Parquet，節省 Colab 磁碟空間 |
 
-**特色**：固定高度捲軸輸出、簡潔一行式進度、API 用量預估、永久性錯誤自動中止。
+**V2 特色**：月批次處理、高併發下載 (繞過 RateLimiter)、多核 Greeks 計算、Drive 嚴格狀態驗證與本地自動清理。
 
 ### 方式二：CLI 全自動化管線 (`run_all.py`)
 
