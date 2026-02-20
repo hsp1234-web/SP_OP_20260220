@@ -21,15 +21,16 @@ venv/
 # Log and Temp
 *.log
 *.tmp
-*.parquet
 
-# Testing & Output files created by us
-test_output.txt
-test_output2.txt
-test_performance_output.txt
-test_10days_output.txt
-test_*.py
-
-# Data Directory
+# Data files (Parquet) — 僅 gitignore data/ 目錄中的，不排除原始碼
 data/
 QuantDataPipeline/data/
+
+# IDE
+.vscode/
+.idea/
+
+# pytest cache
+.pytest_cache/
+htmlcov/
+.coverage

@@ -20,6 +20,12 @@ class DBManager:
                 cls._instance._initialized = False
         return cls._instance
 
+    @classmethod
+    def _reset_instance(cls):
+        """重置 Singleton (僅供測試使用)"""
+        with cls._lock:
+            cls._instance = None
+
     def __init__(self, db_path: Path = DB_PATH):
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -135,6 +141,36 @@ class DBManager:
         except sqlite3.Error as e:
             logger.error(f"取得任務 {task_id} 狀態失敗: {e}")
             return None
+
+    def get_tasks_by_status(self, status: int) -> List[Tuple[str, str, str, str]]:
+        """取得指定狀態的所有任務"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.execute(
+                "SELECT task_id, trade_date, dataset_name, data_id FROM task_registry WHERE status = ?",
+                (status,)
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"取得狀態 {status} 任務失敗: {e}")
+            return []
+
+    def reset_orphan_tasks(self, data_dir: Path) -> int:
+        """
+        清理孤兒狀態：DB 標記完成 (status=1) 但 Parquet 不存在。
+        將其重置為 0 以便重試。回傳重置數量。
+        """
+        tasks = self.get_tasks_by_status(1)
+        reset_count = 0
+        for task_id, trade_date, dataset_name, data_id in tasks:
+            year = trade_date.split("-")[0]
+            filename = f"{data_id}_{trade_date}.parquet" if data_id else f"{trade_date}.parquet"
+            parquet_path = data_dir / year / dataset_name / filename
+            if not parquet_path.exists():
+                logger.warning(f"孤兒任務 {task_id}: Parquet 不存在，重置狀態為 0")
+                self.update_task_status(task_id, 0)
+                reset_count += 1
+        return reset_count
 
 def get_db_manager() -> DBManager:
     """取得 DBManager 單例"""

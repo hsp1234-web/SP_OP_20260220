@@ -12,8 +12,13 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # 資料庫路徑
 DB_PATH = PROJECT_ROOT / "status.db"
 
+# 引進 python-dotenv
+from dotenv import load_dotenv
+load_dotenv(PROJECT_ROOT / ".env")
+
 # FinMind API Token
 FINMIND_API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
+
 
 # 壓縮層級
 COMPRESSION_LEVEL = 3

@@ -13,85 +13,12 @@ from core.db_metadata_manager import get_db_manager
 from core.pipeline_logger import setup_logger
 from core.config import LOG_FILE
 
-# 匯入資料爬取器
-from fetchers.datasets.technical import stock_price_tick, stock_price, trading_date
-from fetchers.datasets.derivative import option_tick
-from fetchers.datasets.chip import large_traders
+# 匯入核心調度與爬取器
+from fetchers.datasets.technical import trading_date
 from fetchers.infrastructure.http_session import get_session
-from storage.parquet_writer import save_dataframe
+from core.fetch_orchestrator import process_task, seed_tasks_from_dates
 
 logger = setup_logger("pipeline.main", LOG_FILE)
-
-def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
-    """
-    執行單一任務：爬取 -> 儲存 -> 更新狀態
-    """
-    # 取得 DBManager 單例 (內部使用 ThreadLocal 管理連線)
-    db = get_db_manager()
-
-    # 再次確認狀態以避免競態條件
-    status = db.get_task_status(task_id)
-    if status is not None and status >= 1:
-        logger.info(f"任務 {task_id} 已完成，跳過。")
-        return
-
-    logger.info(f"開始執行任務 {task_id} ({dataset_name} {date} {data_id})")
-
-    try:
-        # 1. 資料爬取 (Fetch)
-        # 註：爬取器內部使用 get_session() 取得單例 Session
-        df = None
-        if dataset_name == "TaiwanStockPriceTick":
-            df = stock_price_tick.fetch(date, data_id)
-        elif dataset_name == "TaiwanStockPrice":
-            df = stock_price.fetch(date, data_id)
-        elif dataset_name == "TaiwanOptionTick":
-            df = option_tick.fetch(date, data_id)
-        elif dataset_name == "TaiwanOptionOpenInterestLargeTraders":
-            df = large_traders.fetch(date, data_id)
-        else:
-            logger.error(f"未知的資料集名稱: {dataset_name} (任務 {task_id})")
-            return
-
-        # 2. 資料儲存 (Store L4)
-        if df is not None and not df.is_empty():
-            file_path, checksum = save_dataframe(df, dataset_name, date, data_id)
-
-            # 3. 更新狀態 (Update Status)
-            if checksum:
-                db.update_task_status(task_id, 1, checksum) # 1 = L1 完成
-                logger.info(f"任務 {task_id} 執行成功。已儲存至 {file_path}")
-            else:
-                logger.warning(f"任務 {task_id} 未產生檔案 (可能為空資料)。標記為 EMPTY_SKIP (3)。")
-                db.update_task_status(task_id, 3)
-        else:
-             logger.warning(f"任務 {task_id} 抓取到空資料。標記為 EMPTY_SKIP (3)。")
-             db.update_task_status(task_id, 3)
-
-    except Exception as e:
-        logger.error(f"任務 {task_id} 失敗: {e}", exc_info=True)
-        # 保持狀態為 0 (Pending) 以便後續重試
-
-def seed_tasks_from_dates(db, dates_df, target_datasets: List[Tuple[str, str]]):
-    """
-    根據日期與目標資料集註冊任務。
-    """
-    if dates_df.is_empty():
-        logger.warning("未提供日期以建立任務。")
-        return
-
-    # dates_df 的 'date' 欄位為 Datetime
-    # 需轉換為字串 'YYYY-MM-DD'
-    dates = dates_df["date"].dt.strftime("%Y-%m-%d").to_list()
-
-    count = 0
-    for date_str in dates:
-        for dset, did in target_datasets:
-            task_id = f"{date_str}_{dset}_{did}"
-            db.register_task(task_id, date_str, dset, did)
-            count += 1
-
-    logger.info(f"已針對 {len(dates)} 個日期建立了 {count} 個任務。")
 
 def main():
     parser = argparse.ArgumentParser(description="量化數據中台主程式")
@@ -126,15 +53,10 @@ def main():
 
     logger.info(f"共找到 {len(trading_dates_df)} 個交易日。")
 
-    # 2. 建立任務 (Seed Tasks) - 冪等操作
-    # 定義要抓取的目標資料集
-    # 範例 (POC):
-    # - 台積電 (2330) 日股價
-    # - 台指期 (TXO) 大額交易人
+    # 定義要抓取的目標資料集 (改為期貨選項核心運算需求)
     target_datasets = [
-        ("TaiwanStockPrice", "2330"),
-        ("TaiwanOptionOpenInterestLargeTraders", "TXO"),
-        # 可在此擴充
+        ("TaiwanOptionTick", "TXO"),
+        ("TaiwanFuturesTick", "TX"),
     ]
 
     seed_tasks_from_dates(db, trading_dates_df, target_datasets)

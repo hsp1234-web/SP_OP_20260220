@@ -24,9 +24,18 @@ class SchemaEnforcer:
         if "date" in df.columns:
             # Check if date is already Datetime
             if df.schema["date"] == pl.Utf8:
-                 df = df.with_columns(
-                    pl.col("date").str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d", strict=False)
-                )
+                # 判斷是否為帶時間的逐筆字串 (例如 "2024-05-02 08:45:00" 或含有 T, 毫秒等)
+                # 目前 FinMind 逐筆回傳格式為 "YYYY-MM-DD HH:MM:SS" 或包含微秒
+                is_tick_data = "Tick" in dataset or "Time" in df.columns
+
+                if is_tick_data:
+                    df = df.with_columns(
+                        pl.col("date").str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d %H:%M:%S", strict=False)
+                    )
+                else:
+                    df = df.with_columns(
+                        pl.col("date").str.strptime(pl.Datetime(time_unit="ns"), "%Y-%m-%d", strict=False)
+                    )
             elif df.schema["date"] == pl.Date:
                  df = df.with_columns(pl.col("date").cast(pl.Datetime(time_unit="ns")))
 

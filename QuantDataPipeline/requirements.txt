@@ -8,3 +8,5 @@ requests
 fastapi
 uvicorn
 python-dotenv
+pytest
+pytest-cov

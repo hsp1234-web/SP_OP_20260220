@@ -1,121 +1,186 @@
 # 量化數據中台 (QuantDataPipeline)
 
-本專案為高效能金融數據中台，旨在將原始金融數據 (L1) 經過標準化處理轉換為分析就緒的 Parquet 格式 (L4)，並支援高併發、斷點續傳與嚴格的資料驗證。
+高效能金融數據中台，將 FinMind 原始逐筆數據 (L1) 轉化為**多週期量化特徵表** (L4)，支援高併發、斷點續傳、自動化管線與嚴格的資料驗證。
 
-有關詳細的檔案清單與功能說明，請參閱 **[docs/FILE_MANIFEST.md](QuantDataPipeline/docs/FILE_MANIFEST.md)**。
+> 📖 **詳細檔案清單與技術說明**: [docs/FILE_MANIFEST.md](QuantDataPipeline/docs/FILE_MANIFEST.md)  
+> 📐 **開發規格書**: [docs/HANDOVER_SPEC_V2.md](QuantDataPipeline/docs/HANDOVER_SPEC_V2.md)
 
 ## 系統架構
 
-本系統採用 ETL (Extract, Transform, Load) 架構，資料流向如下：
-
 ```mermaid
 graph LR
-    A[FinMind API] -->|HTTPSession (Retries/RateLimit)| B(Fetchers)
-    B -->|SchemaEnforcer (型別校驗/補零)| C(Parsers)
-    C -->|Polars DataFrame| D(Processors)
-    D -->|Atomic Write (.tmp -> .parquet)| E[Storage (L4 Data)]
-    E -->|Status Update| F[SQLite DB (WAL Mode)]
+    A[FinMind API] -->|HTTPSession + Retry/RateLimit| B(Fetchers)
+    B -->|SchemaEnforcer + Extractor| C(Parsers)
+    C -->|status=1| D[Parquet Storage]
+    D -->|Asof Join + Numba BSM| E(Greeks Engine)
+    E -->|status=2| F[GreeksFeatures/]
+    F -->|group_by_dynamic| G(Timeframe Aggregator)
+    G -->|1m/1h/4h/1d 雙表| H[Features/]
+    D & E & F & G -->|狀態追蹤| I[(SQLite WAL)]
 ```
 
-*   **L1 (Raw Data)**: 從 FinMind API 獲取原始 JSON 數據。
-*   **L2 (Normalized)**: 經過 Schema 強制轉型 (Date: Datetime[ns], StockID: Utf8)。
-*   **L4 (Ready-to-Use)**: 儲存為高效能 Parquet 檔案，供回測或分析使用。
+### 資料流層級
+
+| 層級 | 說明 | 模組 | 狀態碼 |
+|------|------|------|--------|
+| L0 | 核心設定與 DB | `core/` | — |
+| L1 | API 下載原始 Tick | `fetchers/` + `main.py` | 0 → 1 |
+| L2 | Greeks 特徵計算 | `compute_greeks_pipeline.py` | 1 → 2 |
+| L3 | 多週期聚合特徵 | `processors/timeframe_aggregator.py` | — |
+| L4 | 最終 Parquet 產出 | `storage/` | — |
+
+### 狀態機 (`status.db`)
+
+```
+0: 待處理 (Pending) → API 下載中或尚未開始
+1: L1 成功 → Parquet 已安全寫入
+2: L2 成功 → Greeks 計算完成
+3: EMPTY_SKIP → 該日無資料，永不重試
+```
+
+---
 
 ## 環境安裝
 
-本專案建議使用 Python 3.10 以上版本。
+```bash
+# 1. 複製專案
+git clone https://github.com/your-repo/SP_OP_20260220.git
+cd SP_OP_20260220/QuantDataPipeline
 
-1.  **複製專案**
-    ```bash
-    git clone https://github.com/your-repo/QuantDataPipeline.git
-    cd QuantDataPipeline
-    ```
+# 2. 建立虛擬環境
+python3 -m venv .venv
+source .venv/bin/activate
 
-2.  **安裝依賴套件**
-    ```bash
-    pip install -r requirements.txt
-    ```
+# 3. 安裝依賴
+pip install -r requirements.txt
 
-3.  **環境變數設定 (非必要)**
-    若擁有 FinMind 付費帳號，可設定環境變數以提升 API 限額：
-    ```bash
-    export FINMIND_API_TOKEN="your_token_here"
-    ```
+# 4. (選用) 設定 FinMind API Token → 速率限制從 12s 降到 6s
+echo "FINMIND_API_TOKEN=your_token" > .env
+```
+
+---
 
 ## 快速上手
 
-執行 `main.py` 即可啟動數據管線。系統會自動抓取交易日並產生任務。
+### 方式一：全自動化管線 (`run_all.py`) — **推薦**
 
-### 範例 1：抓取特定日期範圍
 ```bash
-# 抓取 2023-10-02 到 2023-10-04 的數據
-python3 QuantDataPipeline/main.py --start_date 2023-10-02 --end_date 2023-10-04 --workers 4
+# 倒推 30 天自動下載 + Greeks 計算
+python run_all.py --lookback 30 --env local
+
+# 指定日期範圍
+python run_all.py --start 2024-01-01 --end 2024-01-31
+
+# Colab 環境 (啟用 Google Drive 同步)
+python run_all.py --lookback 60 --env colab
+
+# 僅下載不計算
+python run_all.py --lookback 30 --skip-phase2
 ```
 
-### 範例 2：預設執行 (最近 3 天)
+### 方式二：分步執行
+
 ```bash
-python3 QuantDataPipeline/main.py
+# Step 1: 僅下載原始資料
+python main.py --start_date 2024-05-01 --end_date 2024-05-31 --workers 4
+
+# Step 2: 僅計算 Greeks
+python compute_greeks_pipeline.py --date 2024-05-02
 ```
 
-### 驗證執行結果
-執行驗證腳本以確保資料完整性與系統穩定性：
+### 執行測試
+
 ```bash
-python3 QuantDataPipeline/tests/validate_pipeline.py
+# 全量 pytest (48 個測試)
+python -m pytest tests/ -v --tb=short
+
+# 含覆蓋率
+python -m pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 
-## 資料規格 (Schema)
+---
 
-所有資料皆儲存為 Parquet 格式，並遵循以下嚴格型別定義：
-
-### 核心欄位規範
-*   **date / timestamp**: `Datetime(time_unit='ns')` (奈秒精度時間戳記)
-*   **stock_id**: `Utf8` (字串格式，保留前綴零，如 `0050`, `2330`)
-
-### 主要資料集範例
-
-#### 1. TaiwanStockPrice (個股日成交資訊)
-| 欄位名稱 | 型別 | 說明 |
-| :--- | :--- | :--- |
-| date | Datetime[ns] | 交易日期 |
-| stock_id | Utf8 | 股票代碼 (如 2330) |
-| open | Float64 | 開盤價 |
-| max | Float64 | 最高價 |
-| min | Float64 | 最低價 |
-| close | Float64 | 收盤價 |
-| Trading_Volume | Int64 | 成交量 |
-| Trading_money | Int64 | 成交金額 |
-
-#### 2. TaiwanOptionOpenInterestLargeTraders (期貨大額交易人)
-| 欄位名稱 | 型別 | 說明 |
-| :--- | :--- | :--- |
-| date | Datetime[ns] | 交易日期 |
-| contract_id | Utf8 | 契約代碼 (如 TXO) |
-| buy_volume | Int64 | 買方口數 |
-| sell_volume | Int64 | 賣方口數 |
-
-## 目錄結構說明
+## 目錄結構
 
 ```
 QuantDataPipeline/
-├── core/                   # 核心組件 (Config, DB Manager, Logger)
-│   ├── db_metadata_manager.py # SQLite WAL 連線管理與任務狀態
-│   └── ...
-├── fetchers/               # 資料爬取層 (L1 -> L2)
-│   ├── datasets/           # 各類資料集實作 (Technical, Chip, Derivative)
-│   ├── infrastructure/     # 網路基礎設施 (HTTPSession, Retry, RateLimit)
-│   └── parsers/            # 資料解析與 Schema 驗證 (SchemaEnforcer)
-├── processors/             # 資料處理層 (L2 -> L3/L4) (如指標計算)
-├── storage/                # 儲存層 (Parquet Writer, Integrity Validator)
-├── tests/                  # 測試與驗證腳本
-├── data/                   # 產出的 Parquet 資料檔案 (依年份分資料夾)
-├── docs/                   # 文件目錄
-├── status.db               # 任務狀態與 API 統計資料庫
-├── main.py                 # 程式進入點
-└── requirements.txt        # 專案依賴列表
+├── core/                           # L0 核心層
+│   ├── config.py                   #   全域設定 (路徑/Token/速率/重試)
+│   ├── db_metadata_manager.py      #   SQLite WAL 任務狀態管理器 (Singleton)
+│   ├── fetch_orchestrator.py       #   任務調度器 (分派到對應 fetcher)
+│   └── pipeline_logger.py          #   日誌設定 (RotatingFileHandler)
+├── fetchers/                       # L1 資料爬取層
+│   ├── datasets/                   #   FinMind API 資料集
+│   │   ├── technical/              #     stock_price, stock_price_tick, trading_date
+│   │   ├── derivative/             #     option_tick (TXO), futures_tick (TX)
+│   │   └── chip/                   #     large_traders (大額交易人)
+│   ├── infrastructure/             #   網路基礎設施
+│   │   ├── http_session.py         #     HTTP 連線池 + API 統計
+│   │   ├── rate_limiter.py         #     全域速率限制器
+│   │   └── backoff_retry.py        #     指數退避重試裝飾器
+│   └── parsers/                    #   資料解析
+│       ├── finmind_extractor.py    #     JSON → Polars DataFrame
+│       ├── schema_enforcer.py      #     型別強制 (Datetime[ns], Utf8 補零)
+│       └── payload_builder.py      #     API 請求參數建構
+├── processors/                     # L2 計算與特徵工程層
+│   ├── greeks_engine.py            #   Numba BSM IV + Greeks (核心引擎)
+│   ├── market_microstructure.py    #   GEX/PCR/IV_Skew/RV/VRP 特徵
+│   ├── timeframe_aggregator.py     #   group_by_dynamic 多週期雙表聚合
+│   ├── session_aligner.py          #   日盤/盤後時段對齊
+│   └── options_greeks.py           #   (空殼, 已被 greeks_engine 取代)
+├── storage/                        # L3 儲存層
+│   ├── parquet_writer.py           #   原子性 Parquet 寫入 + MD5 校驗
+│   ├── integrity_validator.py      #   MD5 雜湊計算
+│   └── monthly_roller.py           #   月度打包 (daily → monthly 合併)
+├── tests/                          # 測試 (pytest, 48 cases)
+│   ├── conftest.py                 #   Fixtures: tmp_db, mock API, sample DFs
+│   ├── test_run_all.py             #   管線 + 狀態機 + 結算日測試
+│   ├── test_timeframe_aggregator.py#   多週期聚合測試
+│   ├── test_market_microstructure.py#  市場特徵測試
+│   ├── test_mock_pipeline.py       #   Mock 單元測試
+│   ├── validate_pipeline.py        #   整合驗證 (併發/重試/原子)
+│   └── experiments/                #   實驗性腳本 (裸腳本)
+├── data/                           # 資料產出 (gitignored)
+├── docs/                           # 文件
+│   ├── FILE_MANIFEST.md            #   完整檔案清單與技術說明
+│   └── HANDOVER_SPEC_V2.md        #   開發規格書
+├── main.py                         # L1 下載管線入口
+├── run_all.py                      # 全自動化管線入口 (推薦)
+├── compute_greeks_pipeline.py      # L2 Greeks 計算管線
+├── requirements.txt                # 依賴清單
+├── status.db                       # 任務狀態資料庫
+└── .env                            # 環境變數 (API Token)
 ```
+
+---
+
+## 核心特性
+
+| 特性 | 實作 |
+|------|------|
+| **斷點續傳** | 每筆任務狀態記錄在 SQLite，中斷後自動從上次暫停處繼續 |
+| **原子性寫入** | `.tmp` → `os.rename()` → `.parquet`，防止中途崩潰產生損壞檔案 |
+| **高併發安全** | SQLite WAL + Thread-local 連線，經過 20 線程壓測驗證 |
+| **API 防護** | 指數退避重試 (5 次) + 全域速率限制 + 429 自動冷卻 5 分鐘 |
+| **Numba 加速** | BSM Greeks 計算 JIT 編譯，1 秒處理數十萬筆 |
+| **多週期聚合** | Polars `group_by_dynamic` 產出 1m/1h/4h/1d 雙表 |
+| **混合儲存** | 當月日檔即時更新 + 歷史月檔批量合併 |
+
+## 資料規格 (Schema)
+
+### 核心欄位規範
+- **date / timestamp**: `Datetime(time_unit='ns')` — 奈秒精度
+- **stock_id**: `Utf8` — 字串格式，保留前綴零 (如 `0050`)
+
+### 雙表結構 (由 `timeframe_aggregator` 產出)
+
+**表 A — 合約級 K 線表**: 每合約每週期 OHLCV + Greeks last 值  
+**表 B — 全市場微觀摘要**: 每週期 1 筆 (RV, IV_Skew, Net_GEX, PCR, VRP)
+
+---
 
 ## 在地化規範
 
-*   本專案之 GitHub 說明、Commit Messages、程式碼註解及日誌輸出皆採用 **繁體中文**。
-*   日期格式統一使用 `YYYY-MM-DD`。
-*   時間戳記統一使用 Polars `ns` 精度。
+- 所有文件、註解、日誌輸出採用 **繁體中文**
+- 日期格式: `YYYY-MM-DD`
+- 時間戳記: Polars `ns` 精度

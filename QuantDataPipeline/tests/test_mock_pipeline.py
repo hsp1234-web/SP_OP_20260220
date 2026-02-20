@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 class TestPipeline(unittest.TestCase):
     def setUp(self):
         # Load mock data
-        self.mock_file = Path("QuantDataPipeline/test_mock.json")
+        self.mock_file = Path(__file__).parent / "test_mock.json"
         if not self.mock_file.exists():
             self.skipTest("Mock data file not found")
 

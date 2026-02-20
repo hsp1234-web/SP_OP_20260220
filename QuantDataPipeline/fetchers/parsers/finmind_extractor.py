@@ -28,12 +28,18 @@ def extract_and_cast(data_source: Union[requests.Response, Dict[str, Any]], data
         raise TypeError(f"預期輸入 requests.Response 或 dict，實際得到 {type(data_source)}")
 
     # 2. 業務邏輯錯誤處理
-    if json_payload.get("msg") != "success":
-        msg = json_payload.get("msg", "未知錯誤")
-        logger.error(f"API 回傳錯誤訊息: {msg}")
-        raise ValueError(f"API 錯誤: {msg}")
-
-    data_list = json_payload.get("data", [])
+    # API 可能傳回一個 dict, 或是帶有 msg 的結構
+    if isinstance(json_payload, dict) and "msg" in json_payload:
+        if json_payload.get("msg") != "success":
+            msg = json_payload.get("msg", "未知錯誤")
+            logger.error(f"API 回傳錯誤訊息: {msg}")
+            raise ValueError(f"API 錯誤: {msg}")
+        data_list = json_payload.get("data", [])
+    elif isinstance(json_payload, list):
+        data_list = json_payload
+    else:
+        logger.warning("非預期的 JSON 結構，無法提取 data 欄位")
+        data_list = []
 
     # 3. 空資料防護 (例如假日或停止交易)
     if not data_list:
