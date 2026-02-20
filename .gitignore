@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints
+
+# Databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Log and Temp
+*.log
+*.tmp
+*.parquet
+
+# Testing & Output files created by us
+test_output.txt
+test_output2.txt
+test_performance_output.txt
+test_10days_output.txt
+test_*.py
+
+# Data Directory
+data/
+QuantDataPipeline/data/
