@@ -27,8 +27,8 @@ class TestPipeline(unittest.TestCase):
 
     def test_extract_and_cast_schema(self):
         """Test L1 Extraction and Schema Enforcement using mock data."""
-        # Mock Response object
-        mock_response = MagicMock()
+        import requests
+        mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = self.mock_json
         mock_response.raise_for_status.return_value = None
 

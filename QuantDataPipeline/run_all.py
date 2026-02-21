@@ -239,11 +239,13 @@ def run_pipeline(
         logger.info(f"待處理任務: {total_pending} 個")
     
         completed_p1 = 0
-        download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "10"))
-        logger.info(f"使用 {download_workers} 個執行緒進行併發下載")
+        download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "30"))
+        logger.info(f"使用 {download_workers} 個執行緒進行「無速限」併發下載")
     
         from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+        import time
+        start_time = time.time()
+        
         with ThreadPoolExecutor(max_workers=download_workers) as executor:
             future_to_task = {
                 executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): task_id
@@ -255,11 +257,21 @@ def run_pipeline(
                 try:
                     future.result()
                     completed_p1 += 1
+                    
                     if i % 10 == 0 or i == total_pending:
-                        logger.info(f"[P1 {i}/{total_pending}] 進度更新...")
+                        elapsed = time.time() - start_time
+                        avg_time = elapsed / i
+                        eta_sec = avg_time * (total_pending - i)
+                        eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+                        
+                        pct = (i / total_pending)
+                        blocks = int(pct * 20)
+                        bar = "🟩" * blocks + "⬛" * (20 - blocks)
+                        
+                        logger.info(f"[P1 下載進度] {bar} {i}/{total_pending} ({pct:.1%}) | 預估剩餘: {eta_str}")
                 except Exception as e:
                     if _is_api_quota_error(e):
-                        logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
+                        logger.error(f"🚫 API 額度已耗盡或觸發限制 (429)，將在此停止！")
                         executor.shutdown(wait=False, cancel_futures=True)
                         sys.exit(1)
                     else:

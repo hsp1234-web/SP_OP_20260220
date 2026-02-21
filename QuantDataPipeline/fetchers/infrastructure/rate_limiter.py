@@ -20,12 +20,5 @@ class RateLimiter:
         return cls._instance
 
     def wait(self):
-        """Block until the configured rate limit delay has passed since the last request."""
-        with self._lock:
-            now = time.time()
-            elapsed = now - self.last_request_time
-            if elapsed < RATE_LIMIT_DELAY:
-                sleep_time = RATE_LIMIT_DELAY - elapsed
-                logger.debug(f"Sleeping for {sleep_time:.2f}s to respect rate limit ({RATE_LIMIT_DELAY}s/req)")
-                time.sleep(sleep_time)
-            self.last_request_time = time.time()
+        """No-op: Bypass rate limiting to fetch as fast as possible until blocked."""
+        pass
