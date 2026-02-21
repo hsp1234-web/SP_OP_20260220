@@ -106,8 +106,8 @@ class ColabStrategy(EnvironmentStrategy):
         else:
             logger.info("Drive 上無 status.db，將建立新的")
 
-        # 資料直接寫入 Drive (防孤兒誤判與遺失)，但是 DB 留在本地 SSD (防 Malformed)
-        self.data_dir = self.drive_data_dir
+        # 覆蓋全域變數
+        self.data_dir = self.local_data_dir
         self.db_path = self.local_db_path
 
     def teardown(self):
@@ -262,16 +262,7 @@ def run_pipeline(
                         elapsed = time.time() - start_time
                         avg_time = elapsed / i
                         eta_sec = avg_time * (total_pending - i)
-                        
-                        eta_minutes = int(eta_sec // 60)
-                        eta_seconds = int(eta_sec % 60)
-                        eta_hours = int(eta_sec // 3600)
-                        eta_m_rem = int((eta_sec % 3600) // 60)
-                        
-                        if eta_sec < 3600:
-                            eta_str = f"{eta_minutes}m {eta_seconds}s"
-                        else:
-                            eta_str = f"{eta_hours}h {eta_m_rem}m"
+                        eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
                         
                         pct = (i / total_pending)
                         blocks = int(pct * 20)
