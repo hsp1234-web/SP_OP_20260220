@@ -45,6 +45,7 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
             file_exists = True
         else:
             import os
+            from pathlib import Path
             if os.environ.get("SYNC_TO_DRIVE", "False").lower() == "true":
                 drive_base = os.environ.get("DRIVE_PATH", "/content/drive/MyDrive/QuantData")
                 drive_path = Path(drive_base) / "data" / year / dataset_name / filename
