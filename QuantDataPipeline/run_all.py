@@ -139,6 +139,15 @@ class ColabStrategy(EnvironmentStrategy):
             # 驗證
             if dest.exists() and dest.stat().st_size > 0:
                 logger.info(f"已同步 {local_path.name} → Drive")
+                
+                # 同步成功後，清除本地端 SSD 的暫存副本，避免幾百 GB 將 Colab 灌爆
+                # (預設會清，除非指定 CLEANUP_AFTER_SYNC=False)
+                if os.environ.get("CLEANUP_AFTER_SYNC", "True").lower() == "true":
+                    try:
+                        local_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"清除本地暫存失敗: {local_path.name} ({e})")
+                        
                 return True
             else:
                 logger.error(f"Drive 同步驗證失敗: {dest}")
