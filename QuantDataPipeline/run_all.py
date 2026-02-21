@@ -91,8 +91,8 @@ class ColabStrategy(EnvironmentStrategy):
     def __init__(self, data_dir: Path, db_path: Path,
                  drive_data_dir: Path = None, drive_db_path: Path = None):
         super().__init__(data_dir, db_path)
-        self.drive_data_dir = drive_data_dir or Path("/content/drive/MyDrive/QuantData")
-        self.drive_db_path = drive_db_path or self.drive_data_dir / "status.db"
+        self.drive_data_dir = drive_data_dir or Path("/content/drive/MyDrive/QuantData/data")
+        self.drive_db_path = drive_db_path or Path("/content/drive/MyDrive/QuantData/status.db")
         self.local_data_dir = Path("/content/local_data")
         self.local_db_path = self.local_data_dir / "status.db"
 
