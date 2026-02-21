@@ -125,7 +125,7 @@ class DBManager:
         """取得所有待處理 (status=0) 的任務"""
         try:
             conn = self._get_conn()
-            cursor = conn.execute("SELECT task_id, trade_date, dataset_name, data_id FROM task_registry WHERE status = 0")
+            cursor = conn.execute("SELECT task_id, trade_date, dataset_name, data_id FROM task_registry WHERE status = 0 ORDER BY trade_date DESC")
             return cursor.fetchall()
         except sqlite3.Error as e:
             logger.error(f"取得待處理任務失敗: {e}")

@@ -310,7 +310,7 @@ def run_pipeline(
 
         # 需要期貨也標記為 L1 才能 Asof Join
         computable_dates = []
-        for d in sorted(option_dates):
+        for d in sorted(option_dates, reverse=True):
             fut_task_id = f"{d}_TaiwanFuturesTick_TX"
             fut_status = db.get_task_status(fut_task_id)
             if fut_status is not None and fut_status >= 1:
