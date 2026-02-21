@@ -25,13 +25,17 @@ def save_dataframe(
         logger.warning(f"{dataset_name} {date} {data_id} 資料為空。跳過寫入。")
         return "", ""
 
-    year = date.split("-")[0]
-    target_dir = DATA_DIR / year / dataset_name
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     # Filename strategy:
     # If data_id is present: {data_id}_{date}.parquet
     # If not: {date}.parquet
+    # 動態取得最新的 DATA_DIR (為了支援 Colab動態改變路徑)
+    import core.config
+    current_data_dir = core.config.DATA_DIR
+    
+    year = date.split("-")[0]
+    target_dir = current_data_dir / year / dataset_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     filename = f"{data_id}_{date}.parquet" if data_id else f"{date}.parquet"
     target_path = target_dir / filename
     tmp_path = target_path.with_suffix(".tmp")
