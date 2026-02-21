@@ -24,11 +24,9 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
     """
     db = get_db_manager()
 
-    # 再次確認狀態以避免競態條件
-    status = db.get_task_status(task_id)
-    if status is not None and status >= 1:
-        logger.info(f"任務 {task_id} 已完成，跳過。")
-        return
+    # 在檔案實體檢查架構下，不需要再依靠 status.db 來防止重複抓取
+    # 這裡直接相信 run_all.py 傳進來的「缺件清單」
+    
 
     logger.info(f"開始執行任務 {task_id} ({dataset_name} {date} {data_id})")
 
