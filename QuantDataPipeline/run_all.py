@@ -395,7 +395,8 @@ def run_pipeline(
                             completed_p2 += 1
                             logger.info(f"  ✅ [P2 {i}/{total_compute}] {date_str} Greeks 計算完成 ({len(df_greeks)} 筆)")
                             
-                            # (可選) 算完後，如果需要清理本地暫存，可以呼叫策略的 sync & cleanup
+                            # 算完後，呼叫策略的 sync 將結果傳回 Drive
+                            strategy.sync_file_to_remote(output_path)
                             # 但這裡直接依賴 compute_greeks 和後續流程，或者讓外部 Colab Launcher 控制
                         else:
                             logger.warning(f"  ⚠️ [P2 {i}/{total_compute}] {date_str} Greeks 計算無有效資料")
