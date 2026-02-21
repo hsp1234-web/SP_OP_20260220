@@ -80,6 +80,10 @@ class EnvironmentStrategy:
         """將檔案同步到遠端 (本地模式無操作)"""
         return True
 
+    def get_scan_dir(self) -> Path:
+        """取得進行檔案盤點的目錄基準"""
+        return self.data_dir
+
 
 class LocalStrategy(EnvironmentStrategy):
     """本地開發環境 — 直接操作本地磁碟"""
@@ -165,6 +169,10 @@ class ColabStrategy(EnvironmentStrategy):
         except Exception as e:
             logger.error(f"Drive 同步失敗: {e}")
             return False
+
+    def get_scan_dir(self) -> Path:
+        """雲端模式下，盤點應以真正的 Drive 為基準"""
+        return self.drive_data_dir if self.drive_data_dir else self.data_dir
 
 
 def get_strategy(env: str) -> EnvironmentStrategy:
@@ -261,12 +269,13 @@ def run_pipeline(
     phase2_dates = []  # [date, ...]
 
     # ── 檔案狀態盤點 ──
+    scan_dir = strategy.get_scan_dir()
     logger.info("正在根據 Google Drive / 實體儲存空間進行檔案盤點...")
     for trade_date in all_trade_dates:
         year = trade_date.split("-")[0]
-        opt_path = strategy.data_dir / year / "TaiwanOptionTick" / f"TXO_{trade_date}.parquet"
-        fut_path = strategy.data_dir / year / "TaiwanFuturesTick" / f"TX_{trade_date}.parquet"
-        greeks_path = strategy.data_dir / year / "GreeksFeatures" / f"TXO_Greeks_{trade_date}.parquet"
+        opt_path = scan_dir / year / "TaiwanOptionTick" / f"TXO_{trade_date}.parquet"
+        fut_path = scan_dir / year / "TaiwanFuturesTick" / f"TX_{trade_date}.parquet"
+        greeks_path = scan_dir / year / "GreeksFeatures" / f"TXO_Greeks_{trade_date}.parquet"
 
         has_opt = _is_valid_parquet_file(opt_path)
         has_fut = _is_valid_parquet_file(fut_path)
@@ -364,13 +373,24 @@ def run_pipeline(
         computable_dates = []
         for d in sorted(phase2_dates, reverse=True):
             year = d.split("-")[0]
-            opt_path = strategy.data_dir / year / "TaiwanOptionTick" / f"TXO_{d}.parquet"
-            fut_path = strategy.data_dir / year / "TaiwanFuturesTick" / f"TX_{d}.parquet"
+            opt_path = scan_dir / year / "TaiwanOptionTick" / f"TXO_{d}.parquet"
+            fut_path = scan_dir / year / "TaiwanFuturesTick" / f"TX_{d}.parquet"
             
             if _is_valid_parquet_file(opt_path) and _is_valid_parquet_file(fut_path):
+                # 確保進 Phase 2 計算之前，本地高速 SSD 有材料檔案
+                local_opt = strategy.data_dir / year / "TaiwanOptionTick" / f"TXO_{d}.parquet"
+                local_fut = strategy.data_dir / year / "TaiwanFuturesTick" / f"TX_{d}.parquet"
+                if opt_path != local_opt:
+                    if not _is_valid_parquet_file(local_opt):
+                        local_opt.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(opt_path, local_opt)
+                    if not _is_valid_parquet_file(local_fut):
+                        local_fut.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(fut_path, local_fut)
+
                 computable_dates.append(d)
             else:
-                logger.warning(f"跳過 {d}: 材料不齊全 (P1 獲取失敗或檔案毀損)")
+                logger.warning(f"跳過 {d}: 材料不齊全 (雲端檔案不存在或毀損)")
 
         total_compute = len(computable_dates)
         logger.info(f"待計算 Greeks 日期數: {total_compute} 天")
