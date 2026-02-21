@@ -117,8 +117,13 @@ class ColabStrategy(EnvironmentStrategy):
         """同步 DB 回 Drive"""
         self.drive_data_dir.mkdir(parents=True, exist_ok=True)
         if self.local_db_path.exists():
-            shutil.copy2(self.local_db_path, self.drive_db_path)
-            logger.info(f"已將 status.db 同步回 {self.drive_db_path}")
+            import sqlite3
+            try:
+                with sqlite3.connect(self.local_db_path) as src, sqlite3.connect(self.drive_db_path) as dst:
+                    src.backup(dst)
+                logger.info(f"已將 status.db 備份回 {self.drive_db_path}")
+            except Exception as e:
+                logger.error(f"備份 status.db 失敗: {e}")
 
     def sync_file_to_remote(self, local_path: Path) -> bool:
         """將 Parquet 複製到 Drive"""
