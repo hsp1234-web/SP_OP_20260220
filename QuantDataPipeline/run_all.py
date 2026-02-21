@@ -471,11 +471,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    run_pipeline(
-        start_date=args.start,
-        end_date=args.end,
-        lookback=args.lookback,
-        env=args.env,
-        skip_phase1=args.skip_phase1,
-        skip_phase2=args.skip_phase2,
-    )
+    try:
+        run_pipeline(
+            start_date=args.start,
+            end_date=args.end,
+            lookback=args.lookback,
+            env=args.env,
+            skip_phase1=args.skip_phase1,
+            skip_phase2=args.skip_phase2,
+        )
+    except KeyboardInterrupt:
+        print("\n[run_all.py] 收到強制中斷指令 (KeyboardInterrupt)，暴力終止所有執行緒！")
+        os._exit(1)
