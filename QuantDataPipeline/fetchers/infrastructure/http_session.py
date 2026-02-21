@@ -51,12 +51,16 @@ class HTTPSession:
             response = self.session.get(self.base_url, params=params, timeout=30)
             latency = (time.perf_counter() - start_time) * 1000
 
+            # 確保狀態碼是 200，若為 429/502/503 會直接拋出 HTTPError
+            if response.status_code != 200:
+                raise Exception(f"HTTP 請求失敗，狀態碼: {response.status_code}")
+
             # 解析並統計
             try:
                 res_json = response.json()
-            except ValueError:
-                res_json = {}
-                logger.error(f"解析 JSON 回應失敗: {dataset}")
+            except ValueError as e:
+                logger.error(f"解析 JSON 回應失敗 (可能被 API 限流或防火牆阻擋)，狀態碼: {response.status_code}")
+                raise Exception(f"收到非 JSON 回應 (被阻擋或伺服器異常)") from e
 
             data_count = len(res_json.get("data", []))
 
