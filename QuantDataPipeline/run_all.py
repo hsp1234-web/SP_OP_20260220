@@ -334,9 +334,11 @@ def run_pipeline(
                         month = trade_date_str[:7]
                         month_completed[month] += 1
                         
-                        if i % 10 == 0 or i == total_pending:
+                        # 改為每處理 1 筆就印出 (因為有時候 10 筆要等 1 分鐘，容易讓人覺得卡住)
+                        if True:
                             elapsed = time.time() - start_time
-                            avg_time = elapsed / i
+                            # 避免分母為 0
+                            avg_time = elapsed / i if i > 0 else 0
                             eta_sec = avg_time * (total_pending - i)
                             eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
                             
@@ -350,7 +352,7 @@ def run_pipeline(
                             m_blocks = int(m_pct * 10)
                             m_bar = "🟦" * m_blocks + "⬛" * (10 - m_blocks)
                             
-                            logger.info(f"[P1 下載進度] 總覽 <br>📅 <b>目標月份 ({month})</b>: {m_bar} {m_comp}/{m_tot} ({m_pct:.1%}) <br>🚀 <b>整體管線進度</b>: {bar} {i}/{total_pending} ({pct:.1%}) | ETA: {eta_str}")
+                            logger.info(f"[P1 下載進度] {dataset_name} ({trade_date_str}) 完成 <br>📅 <b>目標月份 ({month})</b>: {m_bar} {m_comp}/{m_tot} ({m_pct:.1%}) <br>🚀 <b>整體進度</b>: {bar} {i}/{total_pending} ({pct:.1%}) | ETA: {eta_str}")
                     except Exception as e:
                         if _is_api_quota_error(e):
                             logger.error(f"🚫 API 額度已耗盡或觸發限制 (429)，將在此停止！")
