@@ -262,7 +262,16 @@ def run_pipeline(
                         elapsed = time.time() - start_time
                         avg_time = elapsed / i
                         eta_sec = avg_time * (total_pending - i)
-                        eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+                        
+                        eta_minutes = int(eta_sec // 60)
+                        eta_seconds = int(eta_sec % 60)
+                        eta_hours = int(eta_sec // 3600)
+                        eta_m_rem = int((eta_sec % 3600) // 60)
+                        
+                        if eta_sec < 3600:
+                            eta_str = f"{eta_minutes}m {eta_seconds}s"
+                        else:
+                            eta_str = f"{eta_hours}h {eta_m_rem}m"
                         
                         pct = (i / total_pending)
                         blocks = int(pct * 20)
