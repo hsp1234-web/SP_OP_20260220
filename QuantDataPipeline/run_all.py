@@ -251,7 +251,7 @@ def run_pipeline(
     
         completed_p1 = 0
         download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "30"))
-        logger.info(f"使用 {download_workers} 個執行緒進行「無速限」併發下載")
+        logger.info(f"使用 {download_workers} 個執行緒進行「限速保護」併發下載")
     
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import time
