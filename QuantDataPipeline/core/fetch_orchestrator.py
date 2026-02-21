@@ -40,7 +40,21 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
         filename = f"{data_id}_{date}.parquet" if data_id else f"{date}.parquet"
         target_path = DATA_DIR / year / dataset_name / filename
         
+        file_exists = False
         if target_path.exists() and target_path.stat().st_size > 0:
+            file_exists = True
+        else:
+            import os
+            if os.environ.get("SYNC_TO_DRIVE", "False").lower() == "true":
+                drive_base = os.environ.get("DRIVE_PATH", "/content/drive/MyDrive/QuantData")
+                drive_path = Path(drive_base) / "data" / year / dataset_name / filename
+                if drive_path.exists() and drive_path.stat().st_size > 0:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(drive_path, target_path)
+                    file_exists = True
+
+        if file_exists:
             logger.debug(f"實體檔案已存在，跳過 API 爬取直接標記完成 (自癒DB): {filename}")
             from storage.integrity_validator import compute_md5
             checksum = compute_md5(target_path)
