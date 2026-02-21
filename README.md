@@ -154,8 +154,11 @@ QuantDataPipeline/
 ├── data/                           # 資料產出 (gitignored)
 ├── docs/                           # 文件
 │   ├── FILE_MANIFEST.md            #   完整檔案清單與技術說明
-│   └── HANDOVER_SPEC_V2.md        #   開發規格書
+│   ├── HANDOVER_SPEC_V2.md        #   開發規格書
+│   └── AI_Context_Data_Schema.md  #   AI 開發交接專用 Schema 規格書
+├── _archive/                       # 測試與封存檔案存放區 (已加入 gitignore)
 ├── colab_launcher.ipynb            # ⭐ Colab 一鍵啟動器 (表單控制面板)
+├── data_health_check.py            # 📊 資料庫健康與儲存容量全景掃描儀表板
 ├── main.py                         # L1 下載管線入口
 ├── run_all.py                      # 全自動化管線入口
 ├── compute_greeks_pipeline.py      # L2 Greeks 計算管線

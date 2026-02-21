@@ -70,11 +70,14 @@ QuantDataPipeline/
 │           └── monthly/            # 月度合併檔
 ├── docs/                           # 文件
 │   ├── FILE_MANIFEST.md            # 本檔案
-│   └── HANDOVER_SPEC_V2.md        # 開發規格書
+│   ├── HANDOVER_SPEC_V2.md        # 開發規格書
+│   └── AI_Context_Data_Schema.md  # AI 開發交接專用 Schema 規格書
 ├── colab_launcher.ipynb            # ⭐ Colab 一鍵啟動器 (表單控制面板)
+├── data_health_check.py            # 📊 資料庫健康與儲存容量全景掃描儀表板
 ├── main.py                         # L1 下載管線入口
 ├── run_all.py                      # 全自動化管線入口 (下載 + 計算)
 ├── compute_greeks_pipeline.py      # L2 Greeks 計算管線
+├── _archive/                       # 測試與封存檔案存放區 (已從 Git 追蹤中移除)
 ├── requirements.txt                # Python 依賴清單
 ├── status.db                       # SQLite 任務狀態資料庫
 ├── pipeline.log                    # 滾動式日誌檔
@@ -141,6 +144,20 @@ QuantDataPipeline/
   - 🔪 **Fail-Fast 中斷**: 接收到 `KeyboardInterrupt` 時，對 subprocess 點下 `kill()` 確保 1 秒內秒斬子程序不卡死，瞬間備份 DB 狀態。
 - **執行流程**: Phase 0 (環境準備) → Phase 1 (資料下載) → Phase 2 (Greeks 計算) → Phase 3 (Drive 同步) → 統計
 - **技術棧**: `IPython.display`, `subprocess`, `os.environ`, `sys.modules` 操作, 正則表達式字串過濾
+
+### `data_health_check.py` — 📊 資料庫健康與儲存容量全景掃描儀表板
+- **職責**: 專為 Colab 和端終端機設計的彩色資料健檢工具。透過 `pathlib` 與 `os.stat` 高速掃描 `data/` 目錄，針對 `Parquet` 特性進行大小判定。
+- **功能**:
+  1. 統計當年/當月各資料表（期貨、選擇權、Greeks）的有效檔案數量與大小（轉換為 KB/MB/GB）。
+  2. 揪出小於 1024 bytes 的潛在「損毀/空殼檔案」，發出紅字警告。
+  3. 提供該目錄下的資料最新日期與最古老日期。
+  4. 最終總結全目錄的有效數、損毀破口數與資料庫總佔用儲存量。
+- **執行**: `python3 data_health_check.py`
+
+### `_archive/` — 測試與封存檔案存放區
+- **職責**: 存放臨時測試腳本、除錯用的 patch script（如 `patch_ipynb.py`, `scan_drive.py` 等）。
+- **特點**: 此資料夾已加入 `.gitignore` 中，以確保不會把臨時的與個人修改上傳至 GitHub。
+
 
 ### `requirements.txt` — Python 依賴清單
 - **內容**: `polars`, `numba`, `scipy`, `numpy`, `duckdb`, `zstandard`, `requests`, `fastapi`, `uvicorn`, `python-dotenv`, `pytest`, `pytest-cov`
@@ -417,6 +434,9 @@ QuantDataPipeline/
 
 ### `docs/FILE_MANIFEST.md` — 本檔案
 - **內容**: 專案中每個檔案的詳細功能說明。
+
+### `docs/AI_Context_Data_Schema.md` — AI 開發交接專用 Schema 規格書
+- **職責**: 整理自專案中的核心 Schema，用來直接餵給外部 AI（例如 Claude、Gemini）以讓他們迅速了解 DataFrame schema、欄位型別，無縫接軌寫量化策略與特徵工程，而不需要讀取任何源碼。
 
 ---
 
