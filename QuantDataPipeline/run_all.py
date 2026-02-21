@@ -110,6 +110,9 @@ class ColabStrategy(EnvironmentStrategy):
         self.data_dir = self.local_data_dir
         self.db_path = self.local_db_path
 
+        import core.config
+        core.config.DATA_DIR = self.local_data_dir
+
     def teardown(self):
         """同步 DB 回 Drive"""
         self.drive_data_dir.mkdir(parents=True, exist_ok=True)
