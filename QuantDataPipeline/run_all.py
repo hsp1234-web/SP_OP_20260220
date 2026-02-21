@@ -136,9 +136,8 @@ class ColabStrategy(EnvironmentStrategy):
             dest = self.drive_data_dir / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(local_path, dest)
-            # 驗證
             if dest.exists() and dest.stat().st_size > 0:
-                logger.info(f"已同步 {local_path.name} → Drive")
+                logger.debug(f"已同步 {local_path.name} → Drive")
                 
                 # 同步成功後，清除本地端 SSD 的暫存副本，避免幾百 GB 將 Colab 灌爆
                 # (預設會清，除非指定 CLEANUP_AFTER_SYNC=False)
@@ -258,17 +257,29 @@ def run_pipeline(
         import time
         start_time = time.time()
         
+        # 統計各月份的任務數量
+        month_totals = {}
+        month_completed = {}
+        for task_id, trade_date_str, dataset_name, data_id in pending:
+            m = trade_date_str[:7]
+            month_totals[m] = month_totals.get(m, 0) + 1
+            month_completed[m] = 0
+
         with ThreadPoolExecutor(max_workers=download_workers) as executor:
             future_to_task = {
-                executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): task_id
+                executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): (task_id, trade_date_str)
                 for task_id, trade_date_str, dataset_name, data_id in pending
             }
             
             for i, future in enumerate(as_completed(future_to_task), 1):
-                task_id = future_to_task[future]
+                task_id, trade_date_str = future_to_task[future]
                 try:
                     future.result()
                     completed_p1 += 1
+                    
+                    # 更新當前月份進度
+                    month = trade_date_str[:7]
+                    month_completed[month] += 1
                     
                     if i % 10 == 0 or i == total_pending:
                         elapsed = time.time() - start_time
@@ -280,7 +291,14 @@ def run_pipeline(
                         blocks = int(pct * 20)
                         bar = "🟩" * blocks + "⬛" * (20 - blocks)
                         
-                        logger.info(f"[P1 下載進度] {bar} {i}/{total_pending} ({pct:.1%}) | 預估剩餘: {eta_str}")
+                        m_comp = month_completed[month]
+                        m_tot = month_totals[month]
+                        m_pct = m_comp / m_tot if m_tot > 0 else 0
+                        m_blocks = int(m_pct * 10)
+                        m_bar = "🟦" * m_blocks + "⬛" * (10 - m_blocks)
+                        
+                        # 結合 HTML 行內換行符號 <br> 建立兩層完美儀表板
+                        logger.info(f"[P1 下載進度] 總覽 <br>📅 <b>目標月份 ({month})</b>: {m_bar} {m_comp}/{m_tot} ({m_pct:.1%}) <br>🚀 <b>整體管線進度</b>: {bar} {i}/{total_pending} ({pct:.1%}) | ETA: {eta_str}")
                 except Exception as e:
                     if _is_api_quota_error(e):
                         logger.error(f"🚫 API 額度已耗盡或觸發限制 (429)，將在此停止！")

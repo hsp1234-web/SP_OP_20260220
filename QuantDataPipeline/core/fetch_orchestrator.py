@@ -41,7 +41,7 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
         target_path = DATA_DIR / year / dataset_name / filename
         
         if target_path.exists() and target_path.stat().st_size > 0:
-            logger.info(f"實體檔案已存在，跳過 API 爬取直接標記完成 (自癒DB): {filename}")
+            logger.debug(f"實體檔案已存在，跳過 API 爬取直接標記完成 (自癒DB): {filename}")
             from storage.integrity_validator import compute_md5
             checksum = compute_md5(target_path)
             db.update_task_status(task_id, 1, checksum)
@@ -78,11 +78,11 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
                     else:
                         # 成功同步到 Drive，核實通過！
                         db.update_task_status(task_id, 1, checksum)
-                        logger.info(f"任務 {task_id} 執行成功並同步至 Drive。已儲存至 {file_path}")
+                        logger.debug(f"任務 {task_id} 執行成功並同步至 Drive。已儲存至 {file_path}")
                 else:
                     # 無開啟 Drive 同步，直接結案
                     db.update_task_status(task_id, 1, checksum) # 1 = L1 完成
-                    logger.info(f"任務 {task_id} 執行成功。已儲存至 {file_path}")
+                    logger.debug(f"任務 {task_id} 執行成功。已儲存至 {file_path}")
             else:
                 logger.warning(f"任務 {task_id} 未產生檔案 (可能為空資料)。標記為 EMPTY_SKIP (3)。")
                 db.update_task_status(task_id, 3)
