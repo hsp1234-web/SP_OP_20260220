@@ -227,21 +227,33 @@ def run_pipeline(
     logger.info(f"待處理任務: {total_pending} 個")
 
     completed_p1 = 0
-    for i, (task_id, trade_date_str, dataset_name, data_id) in enumerate(pending, 1):
-        logger.info(f"[P1 {i}/{total_pending}] {task_id}")
+    download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "10"))
+    logger.info(f"使用 {download_workers} 個執行緒進行併發下載")
 
-        try:
-            process_task(task_id, trade_date_str, dataset_name, data_id)
-            completed_p1 += 1
-        except Exception as e:
-            if _is_api_quota_error(e):
-                logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
-                sys.exit(1)
-            else:
-                logger.error(f"任務 {task_id} 失敗: {e}")
-                # 保持 status=0 讓下次重試，繼續迴圈
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    logger.info(f"Phase 1 完成: {completed_p1}/{total_pending} 個任務成功")
+    with ThreadPoolExecutor(max_workers=download_workers) as executor:
+        future_to_task = {
+            executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): task_id
+            for task_id, trade_date_str, dataset_name, data_id in pending
+        }
+        
+        for i, future in enumerate(as_completed(future_to_task), 1):
+            task_id = future_to_task[future]
+            try:
+                future.result()
+                completed_p1 += 1
+                if i % 10 == 0 or i == total_pending:
+                    logger.info(f"[P1 {i}/{total_pending}] 進度更新...")
+            except Exception as e:
+                if _is_api_quota_error(e):
+                    logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    sys.exit(1)
+                else:
+                    logger.error(f"任務 {task_id} 失敗: {e}")
+
+    logger.info(f"Phase 1 完成: {completed_p1}/{total_pending} 個任務處理完畢 (包含重試/跳過)")
 
     # ── 4. Phase 2: Greeks 計算 ──
     if not skip_phase2:
@@ -274,28 +286,30 @@ def run_pipeline(
         logger.info(f"待計算日期: {total_compute} 個")
 
         completed_p2 = 0
-        for i, date_str in enumerate(computable_dates, 1):
-            logger.info(f"[P2 {i}/{total_compute}] {date_str}")
+        greeks_workers = int(os.environ.get("GREEKS_WORKERS", "2"))
+        logger.info(f"使用 {greeks_workers} 個執行緒進行 Greeks 計算")
 
-            try:
-                df_greeks, output_path, success = compute_greeks_for_date(
-                    date_str, data_dir=strategy.data_dir
-                )
+        with ThreadPoolExecutor(max_workers=max(1, greeks_workers)) as executor:
+            future_to_date = {
+                executor.submit(compute_greeks_for_date, date_str, data_dir=strategy.data_dir): date_str
+                for date_str in computable_dates
+            }
 
-                if success:
-                    # 更新選擇權任務狀態為 2
-                    opt_task_id = f"{date_str}_TaiwanOptionTick_TXO"
-                    db.update_task_status(opt_task_id, 2)
-                    completed_p2 += 1
-                    logger.info(f"  ✅ {date_str} Greeks 計算完成 ({len(df_greeks)} 筆)")
-                else:
-                    logger.warning(f"  ⚠️ {date_str} Greeks 計算無有效資料")
+            for i, future in enumerate(as_completed(future_to_date), 1):
+                date_str = future_to_date[future]
+                try:
+                    df_greeks, output_path, success = future.result()
+                    if success:
+                        opt_task_id = f"{date_str}_TaiwanOptionTick_TXO"
+                        db.update_task_status(opt_task_id, 2)
+                        completed_p2 += 1
+                        logger.info(f"  ✅ [P2 {i}/{total_compute}] {date_str} Greeks 計算完成 ({len(df_greeks)} 筆)")
+                    else:
+                        logger.warning(f"  ⚠️ [P2 {i}/{total_compute}] {date_str} Greeks 計算無有效資料")
+                except Exception as e:
+                    logger.error(f"  ❌ [P2 {i}/{total_compute}] {date_str} Greeks 計算失敗: {e}")
 
-            except Exception as e:
-                logger.error(f"  ❌ {date_str} Greeks 計算失敗: {e}")
-                # 不崩潰，繼續下一日
-
-        logger.info(f"Phase 2 完成: {completed_p2}/{total_compute} 個日期成功")
+        logger.info(f"Phase 2 完成: {completed_p2}/{total_compute} 個日期處理完畢")
 
     # ── 5. 收尾 ──
     strategy.teardown()
