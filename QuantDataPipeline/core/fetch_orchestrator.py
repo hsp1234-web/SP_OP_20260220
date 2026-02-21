@@ -55,14 +55,34 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
             
         df = fetch_func(date, data_id)
 
-        # 2. 資料儲存 (Store L4)
+        # 2. 資料儲存 (Store L4 - SSD)
         if df is not None and not df.is_empty():
             file_path, checksum = save_dataframe(df, dataset_name, date, data_id)
 
-            # 3. 更新狀態 (Update Status)
+            # 3. 雲端同步與狀態核實 (Cloud Customs Verification)
             if checksum:
-                db.update_task_status(task_id, 1, checksum) # 1 = L1 完成
-                logger.info(f"任務 {task_id} 執行成功。已儲存至 {file_path}")
+                # 只有 Colab 環境的 strategy 會有這段邏輯，local 的會直接 return True
+                import os
+                if os.environ.get("SYNC_TO_DRIVE", "False").lower() == "true":
+                    from run_all import ColabStrategy
+                    from core.config import DB_PATH
+                    import pathlib
+                    
+                    # 臨時產生個 Strategy 來借用 sync 功能
+                    strategy = ColabStrategy(pathlib.Path("/content/local_data"), DB_PATH)
+                    sync_success = strategy.sync_file_to_remote(pathlib.Path(file_path))
+                    
+                    if not sync_success:
+                        logger.error(f"任務 {task_id} 雲端同步失敗，拒絕核發 DB 許可 (保持為 0)")
+                        return
+                    else:
+                        # 成功同步到 Drive，核實通過！
+                        db.update_task_status(task_id, 1, checksum)
+                        logger.info(f"任務 {task_id} 執行成功並同步至 Drive。已儲存至 {file_path}")
+                else:
+                    # 無開啟 Drive 同步，直接結案
+                    db.update_task_status(task_id, 1, checksum) # 1 = L1 完成
+                    logger.info(f"任務 {task_id} 執行成功。已儲存至 {file_path}")
             else:
                 logger.warning(f"任務 {task_id} 未產生檔案 (可能為空資料)。標記為 EMPTY_SKIP (3)。")
                 db.update_task_status(task_id, 3)
