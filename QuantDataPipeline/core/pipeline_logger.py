@@ -11,7 +11,7 @@ class TaipeiFormatter(logging.Formatter):
         dt = datetime.fromtimestamp(record.created, tz=timezone(timedelta(hours=8)))
         if datefmt:
             return dt.strftime(datefmt)
-        return dt.strftime("%Y-%m-%d %H:%M:%S,%03d") % int(record.msecs)
+        return f"{dt.strftime('%Y-%m-%d %H:%M:%S')},{int(record.msecs):03d}"
 
 def setup_logger(name: str, log_file: Path | str, level: int = logging.INFO) -> logging.Logger:
     """Function to setup a logger with rotating file handler and console output."""
