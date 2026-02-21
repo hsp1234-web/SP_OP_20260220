@@ -235,16 +235,8 @@ def run_pipeline(
             completed_p1 += 1
         except Exception as e:
             if _is_api_quota_error(e):
-                logger.warning(f"⚠️ API 額度耗盡！冷卻 {COOLDOWN_SECONDS} 秒...")
-                time.sleep(COOLDOWN_SECONDS)
-                logger.info("冷卻完成，繼續執行")
-                # 重試這一筆
-                try:
-                    process_task(task_id, trade_date_str, dataset_name, data_id)
-                    completed_p1 += 1
-                except Exception as retry_e:
-                    logger.error(f"重試失敗: {retry_e}")
-                    # 不崩潰，繼續下一筆
+                logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
+                sys.exit(1)
             else:
                 logger.error(f"任務 {task_id} 失敗: {e}")
                 # 保持 status=0 讓下次重試，繼續迴圈
