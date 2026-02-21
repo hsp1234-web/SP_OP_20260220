@@ -3,10 +3,13 @@ import logging
 from typing import Optional
 
 from fetchers.infrastructure.http_session import HTTPSession
+from fetchers.infrastructure.rate_limiter import RateLimiter
+from fetchers.infrastructure.backoff_retry import exponential_backoff
 from fetchers.parsers.schema_enforcer import enforce_schema
 
 logger = logging.getLogger("pipeline.trading_date")
 
+@exponential_backoff()
 def fetch_trading_dates(session: HTTPSession, start_date: str = "", end_date: str = "") -> pl.DataFrame:
     """
     抓取台灣股市交易日。
@@ -20,6 +23,9 @@ def fetch_trading_dates(session: HTTPSession, start_date: str = "", end_date: st
         包含 'date' 欄位的 Polars DataFrame。
     """
     logger.info(f"正在抓取交易日: {start_date} 至 {end_date}...")
+    
+    # 加入速率限制排隊
+    RateLimiter().wait()
 
     try:
         res = session.get_data(
@@ -46,4 +52,4 @@ def fetch_trading_dates(session: HTTPSession, start_date: str = "", end_date: st
 
     except Exception as e:
         logger.error(f"抓取交易日失敗: {e}")
-        return pl.DataFrame({"date": []})
+        raise e
