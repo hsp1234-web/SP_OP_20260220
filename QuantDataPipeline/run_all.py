@@ -42,13 +42,19 @@ from compute_greeks_pipeline import compute_greeks_for_date
 logger = setup_logger("pipeline.run_all", LOG_FILE)
 
 # ─────────────────────────────────────────────
-# 常數
+# 常數與輔助函數
 # ─────────────────────────────────────────────
 COOLDOWN_SECONDS = 300  # API 額度耗盡冷卻 5 分鐘
-TARGET_DATASETS = [
-    ("TaiwanOptionTick", "TXO"),
-    ("TaiwanFuturesTick", "TX"),
-]
+
+def _is_valid_parquet_file(file_path: Path, min_size_bytes: int = 1024) -> bool:
+    """檢查 Parquet 檔案是否存在且有效 (大小大於閾值)"""
+    if not file_path.exists():
+        return False
+    # 一個最基礎的空 parquet 表頭大約有數百 byte，如果小於 1024 通常是有問題或壞掉的
+    if file_path.stat().st_size < min_size_bytes:
+        logger.warning(f"偵測到雲端存在損毀/過小檔案: {file_path}，將視為遺失。")
+        return False
+    return True
 
 
 # ─────────────────────────────────────────────
@@ -219,10 +225,13 @@ def run_pipeline(
     logger.info(f"  環境: {env.upper()}")
     logger.info(f"{'='*60}")
 
-    # ── 0. 清理孤兒狀態 ──
-    orphan_count = db.reset_orphan_tasks(strategy.data_dir)
-    if orphan_count:
-        logger.info(f"已清理 {orphan_count} 個孤兒任務")
+    # ── 0. 清理孤兒狀態 (保留供相容性與日誌，但不再強制依賴) ──
+    try:
+        orphan_count = db.reset_orphan_tasks(strategy.data_dir)
+        if orphan_count:
+            logger.info(f"已清理 {orphan_count} 個 DB 孤兒紀錄")
+    except Exception:
+        pass
 
     # ── 1. 取得交易日 ──
     logger.info(f"正在取得 {start_date} 至 {end_date} 的交易日曆...")
@@ -241,153 +250,177 @@ def run_pipeline(
     n_dates = len(trading_dates_df)
     logger.info(f"共找到 {n_dates} 個交易日")
 
-    # ── 2. 註冊任務到 DB ──
-    seed_tasks_from_dates(db, trading_dates_df, TARGET_DATASETS)
+    # 不再強依賴 db seed，直接進入實體檔案比對
+    # seed_tasks_from_dates(db, trading_dates_df, TARGET_DATASETS)
+
+    all_trade_dates = sorted(trading_dates_df["date"].cast(str).to_list(), reverse=True)
+    all_trade_dates = [d[:10] for d in all_trade_dates]  # YYYY-MM-DD
+
+    # 動態指派的任務清單
+    phase1_tasks = []  # [(task_id, date, dataset, data_id), ...]
+    phase2_dates = []  # [date, ...]
+
+    # ── 檔案狀態盤點 ──
+    logger.info("正在根據 Google Drive / 實體儲存空間進行檔案盤點...")
+    for trade_date in all_trade_dates:
+        year = trade_date.split("-")[0]
+        opt_path = strategy.data_dir / year / "TaiwanOptionTick" / f"TXO_{trade_date}.parquet"
+        fut_path = strategy.data_dir / year / "TaiwanFuturesTick" / f"TX_{trade_date}.parquet"
+        greeks_path = strategy.data_dir / year / "GreeksFeatures" / f"TXO_Greeks_{trade_date}.parquet"
+
+        has_opt = _is_valid_parquet_file(opt_path)
+        has_fut = _is_valid_parquet_file(fut_path)
+        has_greeks = _is_valid_parquet_file(greeks_path)
+
+        # Phase 1 判斷: 缺材料就補
+        if not has_opt:
+            phase1_tasks.append((f"{trade_date}_TaiwanOptionTick_TXO", trade_date, "TaiwanOptionTick", "TXO"))
+        if not has_fut:
+            phase1_tasks.append((f"{trade_date}_TaiwanFuturesTick_TX", trade_date, "TaiwanFuturesTick", "TX"))
+
+        # Phase 2 判斷: 有材料沒成品就做 (如果有材料且也要做 Phase 1 的話，Phase 1 做完就會自然觸發)
+        # 注意：如果 --skip-phase1 模式下，只有材料都有才能做 Phase 2
+        # 若正常模式，只要這天沒有 greeks，且最後(經過 P1 後)會有材料，就排入 P2
+        if not skip_phase2 and not has_greeks:
+            phase2_dates.append(trade_date)
+
 
     # ── 3. Phase 1: API 下載迴圈 ──
     if not skip_phase1:
         logger.info(f"\n{'─'*40}")
-        logger.info(f"  Phase 1: API 資料下載")
+        logger.info(f"  Phase 1: API 資料下載 (實體檔案盤點模式)")
         logger.info(f"{'─'*40}")
     
-        pending = db.get_pending_tasks()
-        total_pending = len(pending)
-        logger.info(f"待處理任務: {total_pending} 個")
+        total_pending = len(phase1_tasks)
+        logger.info(f"待處理下載任務 (缺件): {total_pending} 個")
     
         completed_p1 = 0
-        download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "30"))
-        logger.info(f"使用 {download_workers} 個執行緒進行「限速保護」併發下載")
-    
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import time
-        start_time = time.time()
+        if total_pending > 0:
+            download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "30"))
+            logger.info(f"使用 {download_workers} 個執行緒進行併發下載")
         
-        # 統計各月份的任務數量
-        month_totals = {}
-        month_completed = {}
-        for task_id, trade_date_str, dataset_name, data_id in pending:
-            m = trade_date_str[:7]
-            month_totals[m] = month_totals.get(m, 0) + 1
-            month_completed[m] = 0
-
-        with ThreadPoolExecutor(max_workers=download_workers) as executor:
-            future_to_task = {
-                executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): (task_id, trade_date_str)
-                for task_id, trade_date_str, dataset_name, data_id in pending
-            }
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import time
+            start_time = time.time()
             
-            for i, future in enumerate(as_completed(future_to_task), 1):
-                task_id, trade_date_str = future_to_task[future]
-                try:
-                    future.result()
-                    completed_p1 += 1
-                    
-                    # 更新當前月份進度
-                    month = trade_date_str[:7]
-                    month_completed[month] += 1
-                    
-                    if i % 10 == 0 or i == total_pending:
-                        elapsed = time.time() - start_time
-                        avg_time = elapsed / i
-                        eta_sec = avg_time * (total_pending - i)
-                        eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+            month_totals = {}
+            month_completed = {}
+            for task_id, trade_date_str, dataset_name, data_id in phase1_tasks:
+                m = trade_date_str[:7]
+                month_totals[m] = month_totals.get(m, 0) + 1
+                month_completed[m] = 0
+
+            with ThreadPoolExecutor(max_workers=download_workers) as executor:
+                future_to_task = {
+                    executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): (task_id, trade_date_str)
+                    for task_id, trade_date_str, dataset_name, data_id in phase1_tasks
+                }
+                
+                for i, future in enumerate(as_completed(future_to_task), 1):
+                    task_id, trade_date_str = future_to_task[future]
+                    try:
+                        future.result()
+                        completed_p1 += 1
                         
-                        pct = (i / total_pending)
-                        blocks = int(pct * 20)
-                        bar = "🟩" * blocks + "⬛" * (20 - blocks)
+                        month = trade_date_str[:7]
+                        month_completed[month] += 1
                         
-                        m_comp = month_completed[month]
-                        m_tot = month_totals[month]
-                        m_pct = m_comp / m_tot if m_tot > 0 else 0
-                        m_blocks = int(m_pct * 10)
-                        m_bar = "🟦" * m_blocks + "⬛" * (10 - m_blocks)
-                        
-                        # 結合 HTML 行內換行符號 <br> 建立兩層完美儀表板
-                        logger.info(f"[P1 下載進度] 總覽 <br>📅 <b>目標月份 ({month})</b>: {m_bar} {m_comp}/{m_tot} ({m_pct:.1%}) <br>🚀 <b>整體管線進度</b>: {bar} {i}/{total_pending} ({pct:.1%}) | ETA: {eta_str}")
-                except Exception as e:
-                    if _is_api_quota_error(e):
-                        logger.error(f"🚫 API 額度已耗盡或觸發限制 (429)，將在此停止！")
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        sys.exit(1)
-                    else:
-                        logger.error(f"任務 {task_id} 失敗: {e}")
-    
-        logger.info(f"Phase 1 完成: {completed_p1}/{total_pending} 個任務處理完畢 (包含重試/跳過)")
+                        if i % 10 == 0 or i == total_pending:
+                            elapsed = time.time() - start_time
+                            avg_time = elapsed / i
+                            eta_sec = avg_time * (total_pending - i)
+                            eta_str = f"{int(eta_sec//60)}m {int(eta_sec%60)}s" if eta_sec < 3600 else f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+                            
+                            pct = (i / total_pending)
+                            blocks = int(pct * 20)
+                            bar = "🟩" * blocks + "⬛" * (20 - blocks)
+                            
+                            m_comp = month_completed[month]
+                            m_tot = month_totals[month]
+                            m_pct = m_comp / m_tot if m_tot > 0 else 0
+                            m_blocks = int(m_pct * 10)
+                            m_bar = "🟦" * m_blocks + "⬛" * (10 - m_blocks)
+                            
+                            logger.info(f"[P1 下載進度] 總覽 <br>📅 <b>目標月份 ({month})</b>: {m_bar} {m_comp}/{m_tot} ({m_pct:.1%}) <br>🚀 <b>整體管線進度</b>: {bar} {i}/{total_pending} ({pct:.1%}) | ETA: {eta_str}")
+                    except Exception as e:
+                        if _is_api_quota_error(e):
+                            logger.error(f"🚫 API 額度已耗盡或觸發限制 (429)，將在此停止！")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            sys.exit(1)
+                        else:
+                            logger.error(f"任務 {task_id} 失敗: {e}")
+        
+            logger.info(f"Phase 1 完成: 成功獲取 {completed_p1}/{total_pending} 份缺失資料")
+        else:
+            logger.info("Phase 1 全部檔案齊全，無需下載。")
 
     # ── 4. Phase 2: Greeks 計算 ──
     if not skip_phase2:
         logger.info(f"\n{'─'*40}")
-        logger.info(f"  Phase 2: Greeks 特徵計算")
+        logger.info(f"  Phase 2: Greeks 特徵計算 (缺件補齊模式)")
         logger.info(f"{'─'*40}")
 
-        l1_tasks = db.get_tasks_by_status(1)
-        # 過濾出需要計算 Greeks 的選擇權任務
-        option_dates = set()
-        for task_id, trade_date_str, dataset_name, data_id in l1_tasks:
-            if dataset_name == "TaiwanOptionTick":
-                # 檢查是否已有 Greeks 輸出
-                year = trade_date_str.split("-")[0]
-                greeks_path = strategy.data_dir / year / "GreeksFeatures" / f"TXO_Greeks_{trade_date_str}.parquet"
-                if not greeks_path.exists():
-                    option_dates.add(trade_date_str)
-
-        # 需要期貨也標記為 L1 才能 Asof Join
+        # 在 P1 下載後，重新盤點可計算的日期 (以防 P1 有失敗導致還是缺件)
         computable_dates = []
-        for d in sorted(option_dates, reverse=True):
-            fut_task_id = f"{d}_TaiwanFuturesTick_TX"
-            fut_status = db.get_task_status(fut_task_id)
-            if fut_status is not None and fut_status >= 1:
+        for d in sorted(phase2_dates, reverse=True):
+            year = d.split("-")[0]
+            opt_path = strategy.data_dir / year / "TaiwanOptionTick" / f"TXO_{d}.parquet"
+            fut_path = strategy.data_dir / year / "TaiwanFuturesTick" / f"TX_{d}.parquet"
+            
+            if _is_valid_parquet_file(opt_path) and _is_valid_parquet_file(fut_path):
                 computable_dates.append(d)
             else:
-                logger.warning(f"跳過 {d}: 期貨資料未就緒 (status={fut_status})")
+                logger.warning(f"跳過 {d}: 材料不齊全 (P1 獲取失敗或檔案毀損)")
 
         total_compute = len(computable_dates)
-        logger.info(f"待計算日期: {total_compute} 個")
+        logger.info(f"待計算 Greeks 日期數: {total_compute} 天")
 
         completed_p2 = 0
-        greeks_workers = int(os.environ.get("GREEKS_WORKERS", "2"))
-        logger.info(f"使用 {greeks_workers} 個執行緒進行 Greeks 計算")
+        if total_compute > 0:
+            greeks_workers = int(os.environ.get("GREEKS_WORKERS", "2"))
+            logger.info(f"使用 {greeks_workers} 個執行緒進行 Greeks 計算")
 
-        with ThreadPoolExecutor(max_workers=max(1, greeks_workers)) as executor:
-            future_to_date = {
-                executor.submit(compute_greeks_for_date, date_str, data_dir=strategy.data_dir): date_str
-                for date_str in computable_dates
-            }
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=max(1, greeks_workers)) as executor:
+                future_to_date = {
+                    executor.submit(compute_greeks_for_date, date_str, data_dir=strategy.data_dir): date_str
+                    for date_str in computable_dates
+                }
 
-            for i, future in enumerate(as_completed(future_to_date), 1):
-                date_str = future_to_date[future]
-                try:
-                    df_greeks, output_path, success = future.result()
-                    if success:
-                        opt_task_id = f"{date_str}_TaiwanOptionTick_TXO"
-                        db.update_task_status(opt_task_id, 2)
-                        completed_p2 += 1
-                        logger.info(f"  ✅ [P2 {i}/{total_compute}] {date_str} Greeks 計算完成 ({len(df_greeks)} 筆)")
-                    else:
-                        logger.warning(f"  ⚠️ [P2 {i}/{total_compute}] {date_str} Greeks 計算無有效資料")
-                except Exception as e:
-                    logger.error(f"  ❌ [P2 {i}/{total_compute}] {date_str} Greeks 計算失敗: {e}")
+                for i, future in enumerate(as_completed(future_to_date), 1):
+                    date_str = future_to_date[future]
+                    try:
+                        df_greeks, output_path, success = future.result()
+                        if success:
+                            completed_p2 += 1
+                            logger.info(f"  ✅ [P2 {i}/{total_compute}] {date_str} Greeks 計算完成 ({len(df_greeks)} 筆)")
+                            
+                            # (可選) 算完後，如果需要清理本地暫存，可以呼叫策略的 sync & cleanup
+                            # 但這裡直接依賴 compute_greeks 和後續流程，或者讓外部 Colab Launcher 控制
+                        else:
+                            logger.warning(f"  ⚠️ [P2 {i}/{total_compute}] {date_str} Greeks 計算無有效資料")
+                    except Exception as e:
+                        logger.error(f"  ❌ [P2 {i}/{total_compute}] {date_str} Greeks 計算失敗: {e}")
 
-        logger.info(f"Phase 2 完成: {completed_p2}/{total_compute} 個日期處理完畢")
+            logger.info(f"Phase 2 完成: {completed_p2}/{total_compute} 個日期處理完畢")
+        else:
+            logger.info("Phase 2 無需計算 (Greeks 皆已存在或材料不足)。")
 
     # ── 5. 收尾 ──
     strategy.teardown()
 
     # 統計
     stats = {
-        "total_tasks": len(db.get_tasks_by_status(0)) + len(db.get_tasks_by_status(1))
-                       + len(db.get_tasks_by_status(2)) + len(db.get_tasks_by_status(3)),
-        "pending": len(db.get_tasks_by_status(0)),
-        "l1_done": len(db.get_tasks_by_status(1)),
-        "l2_done": len(db.get_tasks_by_status(2)),
-        "skipped": len(db.get_tasks_by_status(3)),
+        "dates_checked": len(all_trade_dates),
+        "phase1_downloads": completed_p1 if not skip_phase1 else 0,
+        "phase2_computed": completed_p2 if not skip_phase2 else 0,
     }
 
     logger.info(f"\n{'='*60}")
-    logger.info(f"  管線執行完畢")
-    logger.info(f"  任務總數: {stats['total_tasks']}")
-    logger.info(f"  待處理: {stats['pending']} | L1完成: {stats['l1_done']} | "
-                f"L2完成: {stats['l2_done']} | 跳過: {stats['skipped']}")
+    logger.info(f"  管線執行完畢 (實體檔案模式)")
+    logger.info(f"  交易日查核總數: {stats['dates_checked']}")
+    logger.info(f"  補齊缺少 P1 檔案: {stats['phase1_downloads']} 份")
+    logger.info(f"  補齊缺少 P2 Greeks: {stats['phase2_computed']} 份")
     logger.info(f"{'='*60}")
 
     return stats

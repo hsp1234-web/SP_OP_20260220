@@ -37,62 +37,84 @@ class TestLookbackDateGeneration:
         assert start < end
 
 
-class TestDBStateMachine:
-    """測試 DB 狀態機邏輯"""
+class TestFileBasedLogic:
+    """測試基於實體檔案檢查的邏輯 (取代舊版 DB 狀態機)"""
 
-    def test_skip_completed_tasks(self, tmp_db):
-        """已完成的任務 (status>=1) 應被跳過"""
-        tmp_db.register_task("2024-05-02_TaiwanOptionTick_TXO", "2024-05-02", "TaiwanOptionTick", "TXO")
-        tmp_db.update_task_status("2024-05-02_TaiwanOptionTick_TXO", 1)
+    def test_is_valid_parquet_file_exists_and_large(self, tmp_path):
+        """檔案存在且大小正常，應回傳 True"""
+        from run_all import _is_valid_parquet_file
+        
+        test_file = tmp_path / "good.parquet"
+        test_file.write_text("dummy content" * 100)  # > 1024 bytes
+        assert _is_valid_parquet_file(test_file) is True
 
-        # 已完成任務不應出現在 pending 列表
-        pending = tmp_db.get_pending_tasks()
-        task_ids = [t[0] for t in pending]
-        assert "2024-05-02_TaiwanOptionTick_TXO" not in task_ids
+    def test_is_valid_parquet_file_missing(self, tmp_path):
+        """檔案不存在，應回傳 False"""
+        from run_all import _is_valid_parquet_file
+        
+        test_file = tmp_path / "missing.parquet"
+        assert _is_valid_parquet_file(test_file) is False
 
-    def test_pending_tasks_included(self, tmp_db):
-        """status=0 的任務應出現在待處理列表"""
-        tmp_db.register_task("2024-05-03_TaiwanFuturesTick_TX", "2024-05-03", "TaiwanFuturesTick", "TX")
+    def test_is_valid_parquet_file_too_small(self, tmp_path):
+        """檔案存在但過小 (0 bytes, 損毀)，應回傳 False"""
+        from run_all import _is_valid_parquet_file
+        
+        test_file = tmp_path / "bad.parquet"
+        test_file.write_text("")  # 0 bytes
+        assert _is_valid_parquet_file(test_file) is False
 
-        pending = tmp_db.get_pending_tasks()
-        task_ids = [t[0] for t in pending]
-        assert "2024-05-03_TaiwanFuturesTick_TX" in task_ids
+    @patch("run_all._is_valid_parquet_file")
+    @patch("run_all.get_session")
+    @patch("run_all.trading_date.fetch_trading_dates")
+    @patch("run_all.ThreadPoolExecutor", create=True)
+    def test_phase1_skips_when_files_present(self, mock_executor, mock_fetch, mock_session, mock_is_valid):
+        """當 1, 2 都在時，Phase 1 應完全跳過且 phase1_tasks 長度為 0"""
+        from run_all import run_pipeline
+        import polars as pl
+        
+        # 建立一個假的前置交易日
+        mock_df = pl.DataFrame({"date": [datetime(2024, 5, 2)]})
+        mock_fetch.return_value = mock_df
+        
+        # Mock 檔案檢查：總是回傳 True (檔案都有)
+        mock_is_valid.return_value = True
 
-    def test_empty_skip_not_retried(self, tmp_db):
-        """EMPTY_SKIP (status=3) 應被跳過"""
-        tmp_db.register_task("2024-05-01_TaiwanOptionTick_TXO", "2024-05-01", "TaiwanOptionTick", "TXO")
-        tmp_db.update_task_status("2024-05-01_TaiwanOptionTick_TXO", 3)
+        stats = run_pipeline(
+            start_date="2024-05-02", 
+            end_date="2024-05-02",
+            skip_phase2=True
+        )
+        
+        # 沒有相依缺失檔案被下載
+        assert stats["phase1_downloads"] == 0
+        assert stats["dates_checked"] == 1
 
-        status = tmp_db.get_task_status("2024-05-01_TaiwanOptionTick_TXO")
-        assert status == 3
+    @patch("run_all._is_valid_parquet_file")
+    @patch("run_all.get_session")
+    @patch("run_all.trading_date.fetch_trading_dates")
+    @patch("run_all.ThreadPoolExecutor", create=True)
+    @patch("run_all.process_task")
+    def test_phase1_downloads_when_missing(self, mock_process, mock_executor, mock_fetch, mock_session, mock_is_valid):
+        """當缺件時，應該會列入 Phase 1 的 tasks。"""
+        from run_all import run_pipeline
+        import polars as pl
+        
+        mock_df = pl.DataFrame({"date": [datetime(2024, 5, 2)]})
+        mock_fetch.return_value = mock_df
+        
+        # Mock 永遠是 False，假裝大家都不在
+        mock_is_valid.return_value = False
 
-        pending = tmp_db.get_pending_tasks()
-        task_ids = [t[0] for t in pending]
-        assert "2024-05-01_TaiwanOptionTick_TXO" not in task_ids
+        stats = run_pipeline(
+            start_date="2024-05-02", 
+            end_date="2024-05-02",
+            skip_phase2=True,
+            # 我們不能真的用 ThreadPool，因為 mock_process 沒有回傳 future
+            # 所以只能斷言他會呼叫 process_task
+        )
+        # 即使沒有真的呼叫 future，只要確認統計數值符合預期即可
+        assert stats["phase1_downloads"] == 2
 
-    def test_get_tasks_by_status(self, tmp_db):
-        """get_tasks_by_status 應正確過濾"""
-        tmp_db.register_task("t1", "2024-05-01", "D1", "X")
-        tmp_db.register_task("t2", "2024-05-02", "D2", "Y")
-        tmp_db.update_task_status("t1", 1)
-
-        l1_tasks = tmp_db.get_tasks_by_status(1)
-        assert len(l1_tasks) == 1
-        assert l1_tasks[0][0] == "t1"
-
-        pending = tmp_db.get_tasks_by_status(0)
-        assert len(pending) == 1
-        assert pending[0][0] == "t2"
-
-    def test_orphan_reset(self, tmp_db, tmp_data_dir):
-        """孤兒任務 (DB有記錄但Parquet不存在) 應被重置"""
-        tmp_db.register_task("2024-05-02_TaiwanOptionTick_TXO", "2024-05-02", "TaiwanOptionTick", "TXO")
-        tmp_db.update_task_status("2024-05-02_TaiwanOptionTick_TXO", 1)
-
-        # Parquet 不存在 → 應該被重置
-        reset_count = tmp_db.reset_orphan_tasks(tmp_data_dir)
-        assert reset_count == 1
-        assert tmp_db.get_task_status("2024-05-02_TaiwanOptionTick_TXO") == 0
 
 
 class TestCooldownLogic:
