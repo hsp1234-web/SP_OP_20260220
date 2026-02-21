@@ -33,6 +33,20 @@ def process_task(task_id: str, date: str, dataset_name: str, data_id: str):
     logger.info(f"開始執行任務 {task_id} ({dataset_name} {date} {data_id})")
 
     try:
+        # 0.5 本地實體檔案檢查 (Self-Healing)
+        # 用來防禦 status.db 遺失但實體檔案還在的情況，避免浪費 API 額度
+        from core.config import DATA_DIR
+        year = date.split('-')[0]
+        filename = f"{data_id}_{date}.parquet" if data_id else f"{date}.parquet"
+        target_path = DATA_DIR / year / dataset_name / filename
+        
+        if target_path.exists() and target_path.stat().st_size > 0:
+            logger.info(f"實體檔案已存在，跳過 API 爬取直接標記完成 (自癒DB): {filename}")
+            from storage.integrity_validator import compute_md5
+            checksum = compute_md5(target_path)
+            db.update_task_status(task_id, 1, checksum)
+            return
+
         # 1. 資料爬取 (Fetch)
         fetch_func = FETCHERS.get(dataset_name)
         if not fetch_func:
