@@ -79,7 +79,12 @@ echo "FINMIND_QUOTA_PER_HOUR=1600" >> .env  # 系統自動計算最佳速率
 | `RESTORE_FROM_DRIVE` | 斷線續傳：若本地無 Parquet，是否從 Drive 複製回來算 Greeks |
 | `CLEANUP_AFTER_SYNC` | 每月同步後自動刪除本地 Parquet，節省 Colab 磁碟空間 |
 
+| `CLEANUP_AFTER_SYNC` | 每月同步後自動刪除本地 Parquet，節省 Colab 磁碟空間 |
+
 **V2 特色**：月批次處理、高併發下載 (繞過 RateLimiter)、多核 Greeks 計算、Drive 嚴格狀態驗證與本地自動清理。
+**安全性升級**：
+1. **極速斬斷 (Fail-Fast)**：按下停止鍵時，將光速斬除下載線程，並秒速備份資料庫，保證 1 秒內處理不卡死。
+2. **基因檢測海關 (Strict Validation)**：所有 Parquet 檔案寫入本地或上傳至雲端前，都會被 Polars 引擎強制讀取校驗。大小為 0 byte 或破壞的檔案會當場捨棄，絕不上傳。
 
 ### 方式二：CLI 全自動化管線 (`run_all.py`)
 
@@ -167,8 +172,10 @@ QuantDataPipeline/
 |------|------|
 | **Colab 一鍵啟動** | 表單化控制面板，固定高度捲軸輸出，API 用量預估與進度追蹤 |
 | **斷點續傳** | 每筆任務狀態記錄在 SQLite，中斷後自動從上次暫停處繼續 |
-| **原子性寫入** | `.tmp` → `os.rename()` → `.parquet`，防止中途崩潰產生損壞檔案 |
+| **Fail-Fast 安全關機** | 收集中斷信號後直接砍斷子線程並於 1 秒內備份 DB，解決執行緒卡死問題 |
+| **原子性寫入與基因檢測** | `.tmp` → Polars 讀取驗證第一行 + MD5 → `.parquet`，防止損壞檔案寫入 |
 | **高併發安全** | SQLite WAL + Thread-local 連線，經過 20 線程壓測驗證 |
+| **這端海關驗證** | Drive 同步時檢查附檔名與檔案大小 (`> 0`)，嚴格拒絕 `.tmp` 或空殼上雲 |
 | **API 防護** | 指數退避重試 + 全域速率限制 + 429 冷卻 + 永久性錯誤立即中止 |
 | **智慧速率** | 根據 `FINMIND_QUOTA_PER_HOUR` 自動計算最佳請求間隔 (含 10% 安全邊際) |
 | **Numba 加速** | BSM Greeks 計算 JIT 編譯，1 秒處理數十萬筆 |

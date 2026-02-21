@@ -138,8 +138,9 @@ QuantDataPipeline/
   - 🔄 **模組快取清除**: 每次執行自動清除 `sys.modules` 快取，確保載入最新代碼
   - 🧊 **429 冷卻**: API 限速時自動冷卻 5 分鐘後繼續
   - 📊 **結束統計**: 顯示實際 API 呼叫數、實際速率 vs 額度、總耗時
+  - 🔪 **Fail-Fast 中斷**: 接收到 `KeyboardInterrupt` 時，對 subprocess 點下 `kill()` 確保 1 秒內秒斬子程序不卡死，瞬間備份 DB 狀態。
 - **執行流程**: Phase 0 (環境準備) → Phase 1 (資料下載) → Phase 2 (Greeks 計算) → Phase 3 (Drive 同步) → 統計
-- **技術棧**: `IPython.display`, `subprocess`, `os.environ`, `sys.modules` 操作
+- **技術棧**: `IPython.display`, `subprocess`, `os.environ`, `sys.modules` 操作, 正則表達式字串過濾
 
 ### `requirements.txt` — Python 依賴清單
 - **內容**: `polars`, `numba`, `scipy`, `numpy`, `duckdb`, `zstandard`, `requests`, `fastapi`, `uvicorn`, `python-dotenv`, `pytest`, `pytest-cov`
@@ -337,11 +338,11 @@ QuantDataPipeline/
 ## 五、`storage/` — L3 儲存層
 
 ### `storage/parquet_writer.py` — Parquet 原子性寫入器
-- **職責**: 將 Polars DataFrame 安全地寫入 Parquet 檔案。採用**原子性寫入**機制防止斷電/崩潰導致檔案損壞。
-- **寫入流程**: DataFrame → `.tmp` 暫存 → MD5 校驗 → `os.rename()` → `.parquet` 最終檔
+- **職責**: 將 Polars DataFrame 安全地寫入 Parquet 檔案。採用**原子性寫入**機制與**基因檢測**防止斷電/崩潰導致檔案損壞。
+- **寫入流程**: DataFrame → `.tmp` 暫存 → Polars `read_parquet.head(1)` 基因測試不為空 → MD5 校驗 → `os.rename()` → `.parquet` 最終檔
 - **路徑策略**: `data/{year}/{dataset_name}/{data_id}_{date}.parquet`
 - **壓縮**: Zstandard (level 3)
-- **技術棧**: `polars.write_parquet`, `os.rename` (原子操作)
+- **技術棧**: `polars.write_parquet`, `polars.read_parquet`, `os.rename` (原子操作)
 
 ### `storage/integrity_validator.py` — 檔案完整性校驗
 - **職責**: 提供 `compute_md5(file_path)` 函數，以 4KB chunk 方式計算檔案的 MD5 雜湊值。用於寫入後驗證。

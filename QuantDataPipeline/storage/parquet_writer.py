@@ -45,6 +45,15 @@ def save_dataframe(
         )
 
         # Verify Integrity
+        try:
+            pl.read_parquet(tmp_path).head(1)
+            file_size = tmp_path.stat().st_size
+            if file_size == 0:
+                raise ValueError("Parquet 檔案大小為 0 byte")
+        except Exception as e:
+            logger.error(f"Parquet 基因檢測失敗 (檔案損毀或為空殼): {e}")
+            raise ValueError(f"Parquet 格式無效或損毀: {e}")
+
         checksum = compute_md5(tmp_path)
 
         # Atomic Rename

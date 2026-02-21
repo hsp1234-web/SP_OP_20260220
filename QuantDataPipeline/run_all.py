@@ -120,6 +120,15 @@ class ColabStrategy(EnvironmentStrategy):
     def sync_file_to_remote(self, local_path: Path) -> bool:
         """將 Parquet 複製到 Drive"""
         try:
+            # 雲端海關檢查：阻擋副檔名不對、檔案大小為 0 的破損檔
+            if local_path.suffix == ".tmp":
+                logger.warning(f"拒絕同步暫存檔至 Drive: {local_path.name}")
+                return False
+            
+            if not local_path.exists() or local_path.stat().st_size == 0:
+                logger.error(f"拒絕同步空檔案 (0 byte) 至 Drive: {local_path}")
+                return False
+                
             relative = local_path.relative_to(self.local_data_dir)
             dest = self.drive_data_dir / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +170,7 @@ def run_pipeline(
     end_date: str = None,
     lookback: int = 30,
     env: str = "local",
+    skip_phase1: bool = False,
     skip_phase2: bool = False,
 ):
     """
@@ -219,42 +229,43 @@ def run_pipeline(
     seed_tasks_from_dates(db, trading_dates_df, TARGET_DATASETS)
 
     # ── 3. Phase 1: API 下載迴圈 ──
-    logger.info(f"\n{'─'*40}")
-    logger.info(f"  Phase 1: API 資料下載")
-    logger.info(f"{'─'*40}")
-
-    pending = db.get_pending_tasks()
-    total_pending = len(pending)
-    logger.info(f"待處理任務: {total_pending} 個")
-
-    completed_p1 = 0
-    download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "10"))
-    logger.info(f"使用 {download_workers} 個執行緒進行併發下載")
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    with ThreadPoolExecutor(max_workers=download_workers) as executor:
-        future_to_task = {
-            executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): task_id
-            for task_id, trade_date_str, dataset_name, data_id in pending
-        }
-        
-        for i, future in enumerate(as_completed(future_to_task), 1):
-            task_id = future_to_task[future]
-            try:
-                future.result()
-                completed_p1 += 1
-                if i % 10 == 0 or i == total_pending:
-                    logger.info(f"[P1 {i}/{total_pending}] 進度更新...")
-            except Exception as e:
-                if _is_api_quota_error(e):
-                    logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    sys.exit(1)
-                else:
-                    logger.error(f"任務 {task_id} 失敗: {e}")
-
-    logger.info(f"Phase 1 完成: {completed_p1}/{total_pending} 個任務處理完畢 (包含重試/跳過)")
+    if not skip_phase1:
+        logger.info(f"\n{'─'*40}")
+        logger.info(f"  Phase 1: API 資料下載")
+        logger.info(f"{'─'*40}")
+    
+        pending = db.get_pending_tasks()
+        total_pending = len(pending)
+        logger.info(f"待處理任務: {total_pending} 個")
+    
+        completed_p1 = 0
+        download_workers = int(os.environ.get("DOWNLOAD_WORKERS", "10"))
+        logger.info(f"使用 {download_workers} 個執行緒進行併發下載")
+    
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+        with ThreadPoolExecutor(max_workers=download_workers) as executor:
+            future_to_task = {
+                executor.submit(process_task, task_id, trade_date_str, dataset_name, data_id): task_id
+                for task_id, trade_date_str, dataset_name, data_id in pending
+            }
+            
+            for i, future in enumerate(as_completed(future_to_task), 1):
+                task_id = future_to_task[future]
+                try:
+                    future.result()
+                    completed_p1 += 1
+                    if i % 10 == 0 or i == total_pending:
+                        logger.info(f"[P1 {i}/{total_pending}] 進度更新...")
+                except Exception as e:
+                    if _is_api_quota_error(e):
+                        logger.error("🚫 API 額度已耗盡或觸發限制，停止執行！")
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        sys.exit(1)
+                    else:
+                        logger.error(f"任務 {task_id} 失敗: {e}")
+    
+        logger.info(f"Phase 1 完成: {completed_p1}/{total_pending} 個任務處理完畢 (包含重試/跳過)")
 
     # ── 4. Phase 2: Greeks 計算 ──
     if not skip_phase2:
@@ -350,6 +361,8 @@ if __name__ == "__main__":
     parser.add_argument("--env", type=str, default="local",
                         choices=["local", "colab"],
                         help="執行環境 (預設 local)")
+    parser.add_argument("--skip-phase1", action="store_true",
+                        help="跳過 Phase 1 API 下載")
     parser.add_argument("--skip-phase2", action="store_true",
                         help="跳過 Phase 2 Greeks 計算")
 
@@ -360,5 +373,6 @@ if __name__ == "__main__":
         end_date=args.end,
         lookback=args.lookback,
         env=args.env,
+        skip_phase1=args.skip_phase1,
         skip_phase2=args.skip_phase2,
     )
