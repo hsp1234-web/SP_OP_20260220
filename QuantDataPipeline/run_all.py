@@ -22,6 +22,7 @@ run_all.py — 自動化管線 (P0 核心)
 """
 import argparse
 import logging
+import os
 import shutil
 import sys
 import time
