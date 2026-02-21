@@ -106,8 +106,8 @@ class ColabStrategy(EnvironmentStrategy):
         else:
             logger.info("Drive 上無 status.db，將建立新的")
 
-        # 覆蓋全域變數
-        self.data_dir = self.local_data_dir
+        # 資料直接寫入 Drive (防孤兒誤判與遺失)，但是 DB 留在本地 SSD (防 Malformed)
+        self.data_dir = self.drive_data_dir
         self.db_path = self.local_db_path
 
     def teardown(self):

@@ -6,7 +6,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # 資料目錄 (Parquet 檔案存放處)
-DATA_DIR = PROJECT_ROOT / "data"
+# 如果有掛載 Drive 且指定 SYNC_TO_DRIVE = True，直接將實體 Parquet 檔儲存於 Drive，避免 Colab 結束時消失
+# (注意：唯有 status.db 仍強制留在本地 SSD，避免發生 SQLite lock 導致 disk image is malformed)
+if os.environ.get("SYNC_TO_DRIVE", "False").lower() == "true" and os.environ.get("DRIVE_PATH"):
+    DATA_DIR = Path(os.environ["DRIVE_PATH"])
+else:
+    DATA_DIR = PROJECT_ROOT / "data"
+    
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # 資料庫路徑
