@@ -2,9 +2,9 @@
 
 本文件詳細列出 `QuantDataPipeline` 專案中**每一個檔案**的功能、職責、核心邏輯與使用的技術棧，供後續工程團隊快速理解系統架構。
 
-> **最後更新**: 2026-02-20  
+> **最後更新**: 2026-02-26  
 > **Python 版本**: 3.10+  
-> **核心依賴**: Polars, Numba, SQLite(WAL), Requests
+> **核心依賴**: Polars, Numba, SQLite(WAL), Requests, Zstandard
 
 ---
 
@@ -13,7 +13,9 @@
 ```
 QuantDataPipeline/
 ├── core/                           # L0 核心層：設定、DB管理、日誌
-│   ├── config.py
+│   ├── config.py                   # 全域設定 (含 V4.2 路徑與資源控制)
+│   ├── datasets_registry.py        # 【V4.2】資料集白名單與分類定義
+│   ├── sync_tracker.py             # 【V4.2】SQLite 斷點續傳追蹤器
 │   ├── db_metadata_manager.py
 │   ├── fetch_orchestrator.py
 │   └── pipeline_logger.py
@@ -48,6 +50,10 @@ QuantDataPipeline/
 │   └── monthly_roller.py
 ├── tests/                          # 測試與驗證
 │   ├── conftest.py
+│   ├── test_datasets_registry.py   # 【V4.2】白名單單元測試
+│   ├── test_sync_tracker.py        # 【V4.2】追蹤器單元測試
+│   ├── test_fetch_market_data.py   # 【V4.2】下載管線 Mock 測試
+│   ├── test_process_raw_to_parquet.py # 【V4.2】轉檔邏輯測試
 │   ├── test_run_all.py
 │   ├── test_timeframe_aggregator.py
 │   ├── test_market_microstructure.py
@@ -60,7 +66,7 @@ QuantDataPipeline/
 │       ├── test_asof_join.py
 │       ├── test_greeks.py
 │       └── test_performance.py
-├── data/                           # 資料產出目錄 (自動建立，已 gitignore)
+├── data/                           # L1-L2 目錄 (Tick 與 Greeks)
 │   └── {year}/
 │       ├── TaiwanOptionTick/       # TXO_{date}.parquet
 │       ├── TaiwanFuturesTick/      # TX_{date}.parquet
@@ -68,20 +74,26 @@ QuantDataPipeline/
 │       └── Features/
 │           ├── daily/              # 日檔散檔
 │           └── monthly/            # 月度合併檔
+├── data_v4/                        # 【V4.2】籌碼與報價專屬目錄
+│   ├── temp_raw_data/              # Phase 1 產出的 JSON.gz
+│   └── processed_parquet/          # Phase 2 產出的月度 Parquet
 ├── docs/                           # 文件
 │   ├── FILE_MANIFEST.md            # 本檔案
 │   ├── HANDOVER_SPEC_V2.md        # 開發規格書
 │   └── AI_Context_Data_Schema.md  # AI 開發交接專用 Schema 規格書
 ├── colab_launcher.ipynb            # ⭐ Colab 一鍵啟動器 (表單控制面板)
+├── fetch_market_data.py            # 【V4.2】Phase 1: 全市場倒序下載入口
+├── process_raw_to_parquet.py       # 【V4.2】Phase 2: JSON→Parquet 轉檔入口
 ├── data_health_check.py            # 📊 資料庫健康與儲存容量全景掃描儀表板
 ├── main.py                         # L1 下載管線入口
 ├── run_all.py                      # 全自動化管線入口 (下載 + 計算)
 ├── compute_greeks_pipeline.py      # L2 Greeks 計算管線
 ├── _archive/                       # 測試與封存檔案存放區 (已從 Git 追蹤中移除)
 ├── requirements.txt                # Python 依賴清單
-├── status.db                       # SQLite 任務狀態資料庫
+├── status.db                       # L1-L2 任務資料庫
+├── sync_tracker.db                 # 【V4.2】追蹤器 SQLite (WAL)
 ├── pipeline.log                    # 滾動式日誌檔
-└── .env                            # 環境變數 (Token + 額度)
+└── .env                            # 環境變數 (Token + 20 併發設定)
 ```
 
 ---
@@ -120,6 +132,23 @@ QuantDataPipeline/
 - **技術棧**: `polars` (Lazy Loading, Asof Join), `numba`, `calendar`
 - **API**: 可透過 CLI (`--date 2024-05-02`) 或程式化匯入使用。
 - **改進**: 相較舊版硬編碼 `T=0.05`，現已改用結算日日曆計算真實到期時間。
+
+### `fetch_market_data.py` — 【V4.2】Phase 1: 全市場倒序下載入口
+- **職責**: 針對全市場籌碼、還原價格等資料，進行「落地即存 (Write-on-Fetch)」的快速抓取。
+- **特性**:
+  - 🏎️ **20 執行緒併發**: 榨乾網路頻寬，每日全市場資料 (10萬筆+) 約 1-2 秒抓完。
+  - 🔄 **倒序抓取**: 從最新日期往舊資料回補，優先保證策略時效性。
+  - 🧊 **智慧冷卻系統**: 偵測到 429 額度耗盡，自動進入 10m~30m 階梯式冷卻循環。成功下載即層級歸零 (Smart Reset)。
+  - 🔍 **初次磁碟同步**: 啟動時執行「Deep Scan」，掃描已存在的 Parquet 檔案並寫入 SQLite，即使 JSON 刪除也絕不重複下載。
+  - 📦 **原子性落地**: API 回傳先寫入 `.tmp`，完成後瞬間更名為 `.json.gz`，保障消費者進程安全讀取。
+- **技術棧**: `ThreadPoolExecutor`, `requests`, `threading.Event`
+
+### `process_raw_to_parquet.py` — 【V4.2】Phase 2: JSON→Parquet 轉檔入口
+- **職責**: 離線消費者腳本。掃描暫存 JSON，進行型別強制轉換並按月與舊 Parquet 合併。
+- **核心流程**: 月份分組 → Polars 讀取 → 舊檔合併 + 去重複 (`unique()`) → 轉型 → Zstandard 壓縮 → 原始 JSON 刪除。
+- **特性**: 
+  - 潛水艇模式 (`--watch`): 以單核心無限迴圈運行，每 60 秒巡邏一次新檔案，實現生產者-消費者雙打。
+- **技術棧**: `polars` (單核/Lazy), `zstandard`
 
 ### `colab_launcher.ipynb` — ⭐ Colab 一鍵啟動器
 - **職責**: 提供 Google Colab 中的**單儲存格全自動化管線**，透過圖形化表單控制面板讓使用者無需接觸程式碼。
@@ -227,6 +256,14 @@ QuantDataPipeline/
 - **Fetcher 字典**: 透過 `FETCHERS` dict 將 API 名稱映射到對應的 `fetch` 函數，消除長 if-elif 結構。
 - **空資料處理**: API 回傳空資料時自動標記為 `EMPTY_SKIP (3)`。
 - **技術棧**: 工廠模式 (Factory Pattern)
+
+### `core/datasets_registry.py` — 【V4.2】資料集白名單
+- **職責**: 核心白名單定義文件。定義 7 種目標資料集（還原股價、法人買賣、大額交易人等）的 Metadata 與採集規則。
+- **技術棧**: `dataclasses`, `frozen=True`
+
+### `core/sync_tracker.py` — 【V4.2】斷點續傳追蹤器
+- **職責**: 專為全市場管線設計的狀態追蹤器。維護每個資料集的「回補最舊點」與「更新最新點」。包含 `sync_dates` 表，記錄所有成功轉換的歷史日期，作為防範重複下載的終極鎖。
+- **技術棧**: `sqlite3` (WAL Mode), `threading.local`
 
 ### `core/pipeline_logger.py` — 日誌設定
 - **職責**: 提供統一的 `setup_logger()` 函數，配置 `RotatingFileHandler` (10MB × 5) + `StreamHandler` (Console)。

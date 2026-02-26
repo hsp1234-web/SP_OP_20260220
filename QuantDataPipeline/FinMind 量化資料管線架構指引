@@ -1,0 +1,123 @@
+FinMind 量化資料管線架構指引 (Colab 專用極致穩定版 v4.1)
+
+本文件定義在 Google Colab 與 Google Drive 環境下，抓取與儲存 FinMind 全市場量化資料的標準作業程序 (SOP) 與底層架構設計。
+
+核心精神：
+
+最大化本地處理、最小化 Drive I/O
+
+微批次推進 (Micro-Batching)： 降低全盤失敗風險。
+
+記憶體安全 (Memory Safety)： 下載即落地 (Write-on-Fetch)，避免 OOM。
+
+併發加速 (Concurrency)： 多執行緒並行請求。
+
+優雅退場 (Graceful Shutdown)： 遇 API 額度限制保存既有進度後安全停止。
+
+1. 目標資料清單 (Target Datasets)
+
+針對波段交易與機器學習特徵需求，鎖定以下 7 項核心資料集，加上 1 項基礎設施：
+
+基礎驅動 (Phase 0 獨立處理)：
+
+TaiwanStockTradingDate (交易日曆，用於決定迴圈範圍與過濾無效請求)
+
+技術面：
+
+TaiwanStockPriceAdj (還原股價，全市場)
+
+籌碼面 (期權 & 現貨)：
+
+TaiwanFuturesOpenInterestLargeTraders (期貨大額交易人)
+
+TaiwanOptionOpenInterestLargeTraders (選擇權大額交易人)
+
+TaiwanFuturesInstitutionalInvestors (期貨三大法人)
+
+TaiwanOptionInstitutionalInvestors (選擇權三大法人)
+
+TaiwanStockInstitutionalInvestors (現貨三大法人)
+
+TaiwanTotalExchangeMarginMaintenance (大盤融資維持率)
+
+2. 微批次三階段處理架構 (Micro-Batch Pipeline)
+
+為解決 Colab 記憶體限制與 API 速率限制，採用「微批次 (Micro-Batch)」架構。程式啟動後，依據交易日曆與 DB 紀錄取得「待補日期清單」，並切分為多個固定大小的 Batch（如每 30 個交易日一組），進入以下迴圈：
+
+階段一：併發下載與即時落地 (Phase A: Concurrent Fetch & Dump)
+
+機制： 使用 ThreadPoolExecutor 開啟併發 (預設 4-8 執行緒，可視需求調整)。
+
+動作：
+
+呼叫 FinMind API 取得單日/單次請求資料。
+
+不進行資料解析，直接將回傳的 JSON 字串寫入 Colab 本地暫存區 (/content/temp_raw_data/raw_{date}.json)。
+
+寫入完成後立即釋放記憶體。
+
+斷路器 (Circuit Breaker)： 若任一執行緒遭遇 API 額度限制 (429 或 limit exceeded)：
+
+觸發全域 STOP_FLAG = True。
+
+取消尚未執行的請求。
+
+等待執行中的請求完成後，強制結束階段一，直接進入階段二。
+
+階段二：轉換與持久化 (Phase B: Transform & Persist)
+
+觸發： 階段一的 Batch 正常完成，或被斷路器強制中斷。
+
+動作：
+
+掃描 /content/temp_raw_data/ 內所有 JSON 檔案。
+
+驗證： 略過大小為 0 byte 的無效檔案。
+
+將所有有效 JSON 讀取並轉換為單一 Pandas DataFrame。
+
+輸出為 Parquet 格式，上傳至 Google Drive 目標資料夾。
+
+階段三：狀態更新與清理 (Phase C: Commit & Cleanup)
+
+動作：
+
+對帳驗證： 檢查 Google Drive 上的 Parquet 檔是否存在且大小 > 0 bytes。
+
+若驗證無誤，更新 SQLite DB 中該資料集的最新進度 (涵蓋至該 Batch 最後一筆成功日期)。
+
+清空 /content/temp_raw_data/，釋放 Colab 空間。
+
+檢查 STOP_FLAG：若為 True，代表已達 API 限制，程式優雅結束運行；若為 False，則繼續處理下一個 Batch。
+
+3. SQLite 狀態追蹤與冷啟動機制
+
+所有下載進度均由 SQLite 統一管理。
+
+3.1 狀態紀錄表 (sync_status)
+
+dataset_name (PK): 資料集名稱。
+
+last_success_date: 最後一筆成功寫入 Drive 的資料日期。
+
+last_update_ts: 最後更新時間戳記。
+
+3.2 冷啟動 (Cold Start)
+
+若 DB 為空或查無特定資料集紀錄，起始日期採用變數 DEFAULT_START_DATE (預設為 2010-01-01，可自訂)。
+
+結束日期預設為 TaiwanStockTradingDate 提供的最新交易日。
+
+3.3 安全推送機制 (Safe Push)
+
+由於 shutil.copy2 覆蓋 Drive 檔案時遇網路中斷會導致原資料庫損毀 (0 byte)，強制採用以下原子操作同步 DB：
+
+複製本地 sync_status.db 到 Drive 並命名為 sync_status_new.db。
+
+確認 sync_status_new.db 大小大於 0。
+
+將 Drive 上舊的 sync_status.db 重新命名為 sync_status_backup.db。
+
+將 sync_status_new.db 重新命名為 sync_status.db。
+
+(⚠️ 嚴禁多個 Colab Notebook 同時執行本管線，以免 DB 產生 Race Condition)

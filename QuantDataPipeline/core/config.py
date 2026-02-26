@@ -12,6 +12,12 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # 資料庫路徑
 DB_PATH = PROJECT_ROOT / "status.db"
 
+# V4.2 全市場管線設定
+DATA_V4_DIR = PROJECT_ROOT / "data_v4"
+SYNC_DB_PATH = PROJECT_ROOT / "sync_tracker.db"
+TEMP_RAW_DIR = DATA_V4_DIR / "temp_raw_data"
+PROCESSED_DIR = DATA_V4_DIR / "processed_parquet"
+
 # 引進 python-dotenv
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
@@ -49,3 +55,10 @@ MAX_DELAY = 60.0 # 秒
 
 # 日誌檔案
 LOG_FILE = PROJECT_ROOT / "pipeline.log"
+
+# V4.2 資源控制
+V4_DOWNLOAD_WORKERS = int(os.getenv("V4_DOWNLOAD_WORKERS", "4"))
+V4_PROCESS_WORKERS = int(os.getenv("V4_PROCESS_WORKERS", "2"))
+
+# 環境偵測
+IS_COLAB = "google.colab" in sys.modules

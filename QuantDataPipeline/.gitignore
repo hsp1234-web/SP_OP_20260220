@@ -5,14 +5,30 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 .env
 .ipynb_checkpoints
+
+# Databases
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
+
+# Log files
 *.log
+pipeline.log
+
+# Temporary and Data Files
 *.tmp
 *.parquet
+*.json.gz
+
+# Data directories
 data/
+data_v4/
 _archive/
+
+# Tool specific
+.pytest_cache/
+.vscode/
